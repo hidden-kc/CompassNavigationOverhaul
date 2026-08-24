@@ -1,18 +1,23 @@
-# Get port from Github
-vcpkg_from_github(
+# Fetch the source over git rather than over GitHub's generated tarballs.
+#
+# The original port used vcpkg_from_github with a pinned SHA512 of the .tar.gz. Those
+# archives are re-compressed by GitHub over time, so the recorded hash eventually stops
+# matching and the port fails to download. Fetching the commit with git keeps the same
+# pin (the commit id) while letting git verify the content, so this cannot rot the same way.
+vcpkg_from_git(
     OUT_SOURCE_PATH SOURCE_PATH
-    REPO alandtse/CommonLibVR
+    URL https://github.com/alandtse/CommonLibVR
     REF 2b983f5281bfadd26ee20787390d2513e8ffe38a
-    SHA512 d8bae2aa1c066def4a194c85dda57b0b7b758f3221c4d6ef7783c0e29fb7cff353085fbd297996762fd06fd191fb0f19646248e1448001f27c0cbf56cfa3a443
+    FETCH_REF ng
     HEAD_REF ng
 )
 
 # Get submodule and copy to extern/ folder (done manually because Vcpkg does not support Git submodules)
-vcpkg_from_github(
+vcpkg_from_git(
     OUT_SOURCE_PATH SOURCE_PATH_OPENVR
-    REPO ValveSoftware/openvr
+    URL https://github.com/ValveSoftware/openvr
     REF ebdea152f8aac77e9a6db29682b81d762159df7e
-    SHA512 4fb668d933ac5b73eb4e97eb29816176e500a4eaebe2480cd0411c95edfb713d58312036f15db50884a2ef5f4ca44859e108dec2b982af9163cefcfc02531f63
+    FETCH_REF master
     HEAD_REF master
 )
  file(COPY "${SOURCE_PATH_OPENVR}/" DESTINATION "${SOURCE_PATH}/extern/openvr")

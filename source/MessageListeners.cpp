@@ -10,6 +10,7 @@
 #include "IUI/GFxLoggers.h"
 
 #include "Hooks.h"
+#include "UI.h"
 
 #undef GetModuleHandle
 
@@ -42,6 +43,10 @@ void SKSEMessageListener(SKSE::MessagingInterface::Message* a_msg)
 			hooks::compat::MapMarkerFramework::pluginInfo = mapMarkerFrameworkPluginInfo;
 			logger::info("Successfully loaded compatibility patch for CoMAP!");
 		}
+	}
+	else if (a_msg->type == SKSE::MessagingInterface::kPostPostLoad)
+	{
+		UI::Register();
 	}
 }
 
