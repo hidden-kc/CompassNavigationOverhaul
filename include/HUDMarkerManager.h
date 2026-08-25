@@ -50,8 +50,38 @@ namespace CNO
 
 		std::string GetSideInQuest(RE::QUEST_DATA::Type a_questType) const;
 
-		Compass* compass = Compass::GetSingleton();
-		QuestItemList* questItemList = QuestItemList::GetSingleton();
+		// TESForm::LookupByID returns null for a form ID that does not resolve (missing
+		// master, corrupted install), and TESForm::As<T>() reads the form's type off `this`
+		// without a null check of its own - calling it on a null lookup result crashes the
+		// same way the sibling mod's unchecked GetSetting() did. A missing faction just means
+		// the player is treated as not belonging to/opposing it, which GetSideInQuest already
+		// falls back to correctly when IsPlayerAllyOfFaction/IsPlayerOpponentOfFaction are
+		// given a null faction.
+		static const RE::TESFaction* LookupFaction(std::uint32_t a_formID, const char* a_name)
+		{
+			if (RE::TESForm* form = RE::TESForm::LookupByID(a_formID))
+			{
+				if (const RE::TESFaction* faction = form->As<RE::TESFaction>())
+				{
+					return faction;
+				}
+
+				logger::error("Form {:08X} ({}) is not a faction", a_formID, a_name);
+
+				return nullptr;
+			}
+
+			logger::error("Could not find faction {} (form {:08X}); side-in-quest checks against it will be skipped", a_name, a_formID);
+
+			return nullptr;
+		}
+
+		// Not cached as members: Compass/QuestItemList::InitSingleton() run off Infinity UI
+		// messages, and this manager's own singleton is constructed lazily off the first
+		// compass-update hook call - there is no guarantee the two happen in the order we'd
+		// like. Caching a null result here at construction would mean every frame for the
+		// rest of the session dereferences it. SetMarkersExtraInfo() fetches and null-checks
+		// these fresh each call instead.
 
 		float facingAngle = settings::display::angleToShowMarkerDetails;
 		float keepFocusedAngle = settings::display::angleToKeepMarkerDetailsShown;
@@ -73,10 +103,10 @@ namespace CNO
 
 		// Factions to lookup
 		// Reference: Creation Kit -> Skyrim.esm, Dawnguard.esm
-		const RE::TESFaction* const imperialLegionFaction = RE::TESForm::LookupByID(0x0002BF9A)->As<RE::TESFaction>();
-		const RE::TESFaction* const stormCloaksFaction = RE::TESForm::LookupByID(0x00028849)->As<RE::TESFaction>();
-		const RE::TESFaction* const sonsOfSkyrimFaction = RE::TESForm::LookupByID(0x0002BF9B)->As<RE::TESFaction>();
-		const RE::TESFaction* const dawnGuardFaction = RE::TESForm::LookupByID(0x02014217)->As<RE::TESFaction>();
-		const RE::TESFaction* const vampireFaction = RE::TESForm::LookupByID(0x02003376)->As<RE::TESFaction>();
+		const RE::TESFaction* const imperialLegionFaction = LookupFaction(0x0002BF9A, "ImperialLegionFaction");
+		const RE::TESFaction* const stormCloaksFaction = LookupFaction(0x00028849, "StormCloaksFaction");
+		const RE::TESFaction* const sonsOfSkyrimFaction = LookupFaction(0x0002BF9B, "SonsOfSkyrimFaction");
+		const RE::TESFaction* const dawnGuardFaction = LookupFaction(0x02014217, "DawnGuardFaction");
+		const RE::TESFaction* const vampireFaction = LookupFaction(0x02003376, "VampireFaction");
 	};
 }

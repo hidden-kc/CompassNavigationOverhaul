@@ -1,6 +1,6 @@
 # Port notes — INI-only settings → SKSE Menu Framework
 
-**Version 1.0.0.** This is a fork of
+**Version 1.0.1.** This is a fork of
 [alexsylex/CompassNavigationOverhaul](https://github.com/alexsylex/CompassNavigationOverhaul)
 2.2.0 that adds an in-game settings page driven by
 [SKSE Menu Framework 3](https://github.com/QTR-Modding/SKSE-Menu-Framework-3), so the compass
@@ -33,6 +33,37 @@ visibility, marker-detail timing, quest list position, its per-pace show delays,
 - is read directly from `settings::display::*` / `settings::questlist::*` at the point of use
 every time (a marker draw, a quest-list `Invoke`), so a menu edit takes effect the next time
 that code runs, no explicit apply call needed for those at all.
+
+## 1.0.1: null-safety audit (preventative, no known crash in this mod)
+
+Standing rule now (`CLAUDE.md` rule 14): every mod in this project gets audited for
+unchecked null-dereference lookups, not just Dragon's Eye Minimap where the pattern actually
+crashed. This mod's own INI settings (`utils::INISettingCollection`/`Settings.cpp`) were
+already null-safe via the existing `Read<T>()` helper - no changes needed there, and no raw
+`RE::INISettingCollection`/`RE::INIPrefSettingCollection`/`RE::GameSettingCollection` usage
+exists anywhere in this codebase (the crash-causing pattern from the sibling mod simply
+isn't present here). Real instances fixed elsewhere:
+
+- `source/MessageListeners.cpp` (`InfinityUIMessageListener`) - `message->movie->GetMovieDef()
+  ->GetFileURL()` dereferenced `movie` and `GetMovieDef()` unconditionally. Also, the
+  `kPreReplaceInstance` branch used `CNO::Compass::GetSingleton()` right after
+  `InitSingleton()` with no null check - inconsistent with the `kPostPatchInstance` branch a
+  few lines down, which did check. Same fix applied to the `QuestItemList` singleton in the
+  same file.
+- `include/HUDMarkerManager.h`/`source/HUDMarkerManager.cpp` - `compass`/`questItemList` were
+  cached as raw member pointers at construction and dereferenced unconditionally throughout
+  `SetMarkersExtraInfo()`. If construction ever raced ahead of the Infinity UI messages that
+  populate those singletons, `nullptr` would be cached forever and every subsequent frame
+  would crash. Removed the caching; the singletons are now fetched fresh each call with a
+  null check. Five faction lookups (`RE::TESForm::LookupByID(id)->As<RE::TESFaction>()`) were
+  also dereferenced unconditionally - added a `LookupFaction()` helper with a null fallback,
+  verified safe since the only uses compare the faction pointer by identity, never dereference it.
+- `source/Hooks.cpp` - four `RE::TESObjectREFR::LookupByHandle(a_refHandle).get()` results
+  (`UpdateQuests`, `UpdateLocations`, `UpdateEnemies`, `UpdatePlayerSetMarker`) were
+  dereferenced unconditionally - a stale/unloaded ref handle returns null here.
+
+No known crash was ever reported for any of these in this mod specifically - this pass is
+preventative, following the same reasoning that caught the sibling mod's real bug.
 
 ## Building
 

@@ -57,9 +57,29 @@ void InfinityUIMessageListener(SKSE::MessagingInterface::Message* a_msg)
 		return;
 	}
 
-	if (auto message = IUI::API::TranslateAs<IUI::API::Message>(a_msg)) 
+	if (auto message = IUI::API::TranslateAs<IUI::API::Message>(a_msg))
 	{
-		std::string_view movieUrl = message->movie->GetMovieDef()->GetFileURL();
+		// Infinity UI is expected to always populate movie/GetMovieDef() for every message it
+		// sends, but a plugin combination we have not tested could plausibly deliver one that
+		// does not - dereferencing that unconditionally is exactly how the sibling mod's
+		// crash happened, so bail out rather than assume the contract always holds.
+		if (!message->movie)
+		{
+			logger::error("Infinity UI message (type {}) has no movie; ignoring it", static_cast<std::uint32_t>(a_msg->type));
+
+			return;
+		}
+
+		RE::GFxMovieDef* movieDef = message->movie->GetMovieDef();
+
+		if (!movieDef)
+		{
+			logger::error("Infinity UI message (type {}) has no movie definition; ignoring it", static_cast<std::uint32_t>(a_msg->type));
+
+			return;
+		}
+
+		std::string_view movieUrl = movieDef->GetFileURL();
 
 		if (movieUrl.find("HUDMenu") == std::string::npos)
 		{
@@ -81,13 +101,25 @@ void InfinityUIMessageListener(SKSE::MessagingInterface::Message* a_msg)
 				if (pathToOriginal == CNO::Compass::path)
 				{
 					CNO::Compass::InitSingleton(preReplaceMessage->originalInstance);
-					auto compass = CNO::Compass::GetSingleton();
 
-					logger::debug("Before replacing:");
-					memberLogger.LogMembersOf(*compass);
+					// InitSingleton only sets the singleton the first time it is called, so a
+					// re-entrant or unexpectedly-ordered kPreReplaceInstance message could
+					// plausibly leave it unset here - the same "it always worked before"
+					// assumption that caused the sibling mod's crash. GetSingleton() is
+					// checked a few lines further down in the kPostPatchInstance case; do the
+					// same here instead of trusting InitSingleton unconditionally.
+					if (auto compass = CNO::Compass::GetSingleton())
+					{
+						logger::debug("Before replacing:");
+						memberLogger.LogMembersOf(*compass);
 
-					RE::GPointF coord = compass->LocalToGlobal();
-					logger::debug("{} is on ({}, {})", compass->ToString().c_str(), coord.x, coord.y);
+						RE::GPointF coord = compass->LocalToGlobal();
+						logger::debug("{} is on ({}, {})", compass->ToString().c_str(), coord.x, coord.y);
+					}
+					else
+					{
+						logger::error("Compass singleton could not be initialized for {}", CNO::Compass::path);
+					}
 				}
 			}
 			break;
@@ -124,12 +156,20 @@ void InfinityUIMessageListener(SKSE::MessagingInterface::Message* a_msg)
 				else if (pathToNew == QuestItemList::path)
 				{
 					QuestItemList::InitSingleton(postPatchMessage->newInstance);
-					auto questItemList = QuestItemList::GetSingleton();
 
-					memberLogger.LogMembersOf(*questItemList);
+					// Same reasoning as the Compass singleton above: InitSingleton is not
+					// guaranteed to have set the singleton by the time we read it back here.
+					if (auto questItemList = QuestItemList::GetSingleton())
+					{
+						memberLogger.LogMembersOf(*questItemList);
 
-					RE::GPointF coord = questItemList->LocalToGlobal();
-					logger::debug("{} is on ({}, {})", questItemList->ToString().c_str(), coord.x, coord.y);
+						RE::GPointF coord = questItemList->LocalToGlobal();
+						logger::debug("{} is on ({}, {})", questItemList->ToString().c_str(), coord.x, coord.y);
+					}
+					else
+					{
+						logger::error("QuestItemList singleton could not be initialized for {}", QuestItemList::path);
+					}
 				}
 			}
 			break;

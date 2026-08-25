@@ -147,6 +147,29 @@ namespace CNO
 
 	void HUDMarkerManager::SetMarkersExtraInfo()
 	{
+		// Fetched fresh rather than cached as members: Compass/QuestItemList::InitSingleton()
+		// run off Infinity UI messages that are not guaranteed to have landed before this
+		// manager's own singleton was first constructed off a compass-update hook. A stale
+		// null cached at construction would dereference every frame for the rest of the
+		// session; bailing out here just skips this frame's compass/quest-list update.
+		Compass* compass = Compass::GetSingleton();
+
+		if (!compass)
+		{
+			logger::error("Compass singleton not ready; skipping this frame's compass update");
+
+			return;
+		}
+
+		QuestItemList* questItemList = QuestItemList::GetSingleton();
+
+		if (!questItemList)
+		{
+			logger::error("QuestItemList singleton not ready; skipping this frame's compass update");
+
+			return;
+		}
+
 		bool focusChanged = UpdateFocusedMarker();
 
 		if (focusChanged)
