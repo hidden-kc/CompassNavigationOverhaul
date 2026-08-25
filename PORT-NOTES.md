@@ -1,6 +1,6 @@
 # Port notes — INI-only settings → SKSE Menu Framework
 
-**Version 1.0.2.** This is a fork of
+**Version 1.0.3.** This is a fork of
 [alexsylex/CompassNavigationOverhaul](https://github.com/alexsylex/CompassNavigationOverhaul)
 2.2.0 that adds an in-game settings page driven by
 [SKSE Menu Framework 3](https://github.com/QTR-Modding/SKSE-Menu-Framework-3), so the compass
@@ -65,25 +65,59 @@ isn't present here). Real instances fixed elsewhere:
 No known crash was ever reported for any of these in this mod specifically - this pass is
 preventative, following the same reasoning that caught the sibling mod's real bug.
 
-## 1.0.2: a real crash fix - trampoline undersized for a shared destination
+## 1.0.2: attempted crash fix - real hardening, but not the actual cause
 
 Confirmed by an actual in-game error dialog Liam hit on load: `SKSE/Trampoline.h(287):
-displacement is out of range`. `Hooks.h`'s `Install()` hooks two separate call sites inside
-`HUDMarkerManager::UpdateLocations` (`AllowedToShowMapMarkerHook::Address1()`/`Address2()`),
-both ultimately calling the same C++ destination function, `AllowedToShowMapMarker`. The
-trampoline size calculation reserved space for that hook only once, on the reasoning "the
-destination is the same, so allocate for it once" - but that conflates the *destination
-function* (genuinely shared) with the *trampoline stub* written per hook *site* (not
-shared): `write_call()` is invoked twice, for two different source addresses, and each call
-needs its own small indirect-jump stub written into trampoline-allocated memory near that
-specific hook site. Undersizing by one stub's worth meant the second `write_call()` ran out
-of reserved room, and whatever fallback allocation SKSE used for the overflow landed outside
-the ±2GB displacement range a near call/jmp can encode - hence the error, and the mod
-refusing to load at all. Fixed by sizing for both `allowedToShowMapMarkerHook[0]`/`[1]`
-explicitly rather than relying on the shared-destination reasoning, which was correct about
-the destination but wrong about what that implied for trampoline space. This bug predates
-the 1.0.1 null-safety audit - unrelated to those changes, just never exposed until this was
-actually loaded in game for the first time.
+displacement is out of range`. First diagnosis: `Hooks.h`'s `Install()` hooks two separate
+call sites inside `HUDMarkerManager::UpdateLocations`
+(`AllowedToShowMapMarkerHook::Address1()`/`Address2()`), both ultimately calling the same
+C++ destination function, `AllowedToShowMapMarker`. The trampoline size calculation reserved
+space for that hook only once, on the reasoning "the destination is the same, so allocate
+for it once". Fixed by sizing for both `allowedToShowMapMarkerHook[0]`/`[1]` explicitly.
+
+**This was real hardening (each hook site's `write_call()` is a distinct call, worth sizing
+for explicitly) but turned out not to be the actual cause** - the crash recurred on 1.0.2,
+still built and installed correctly. `SKSE::Trampoline::write_5branch()` deduplicates by
+*destination address* internally (`_5branches`, a map from `a_dst` to an already-written
+stub) - two hooks sharing a destination reuse the same stub automatically, no double
+allocation ever happens. The 1.0.2 fix is harmless (a few extra bytes reserved, never used)
+but was not what needed fixing. See 1.0.3 below for the real cause, found only after Liam
+reported the crash persisted on 1.0.2 and pointed at real trampoline internals rather than
+re-guessing.
+
+## 1.0.3: the actual crash fix - CoMAP compatibility patch, unchecked failure paths
+
+The real cause, found by reading `SKSE::Trampoline`'s own source: the crash is
+`write_6branch()`, not `write_5branch()` - meaning the failing hook is `Hook<6>`, and the
+only `Hook<6>` in this codebase is `compat::MapMarkerFramework::Install()`'s
+`GetCompassMovieDefHook`, CoMAP's own compatibility patch (see "What's specific to..." /
+`Case A` etc. above - `MessageListeners.cpp` installs this automatically when a plugin named
+`MapMarkerFramework` under version 2.2.0 is detected).
+
+Two unchecked failure paths in that one function, both now fixed:
+
+1. `SigScanner::FindPattern<...>(a_moduleHandle)` returns `0` if the expected byte pattern
+   isn't found in the installed CoMAP build (a version this pattern was never verified
+   against). The old code did `+ 6` unconditionally, turning a "not found" into address `6`
+   - hooking a bogus, essentially null address. Now checked; logs and skips the patch if the
+   pattern isn't found.
+2. `CustomTrampoline` (`include/utils/Trampoline.h`) searches backward from CoMAP's own
+   module base for a free memory block within displacement range, to write the hook's
+   trampoline stub into. **This search can genuinely fail** - confirmed in game, not
+   hypothetical - especially in a process with many other DLLs loaded, leaving free blocks
+   scarce near any one module. The old code called `inst->set_trampoline(base, a_size, ...)`
+   with `base == nullptr` regardless, which left the trampoline reporting a non-zero
+   *capacity* with a null backing pointer. The first `allocate()` through it then returned
+   `nullptr` too, and `write_6branch()` computed a displacement of roughly
+   `0 - (hook site address)` - nowhere close to `±2GB`, hence the crash. Fixed two ways:
+   `CustomTrampoline` now leaves the underlying `SKSE::Trampoline` in its default *empty*
+   state instead of calling `set_trampoline` on a null base, and a new `Trampoline::IsValid()`
+   (`!inst->empty()`) lets `compat::MapMarkerFramework::Install()` check before writing -
+   logging and skipping the patch cleanly instead of crashing if the search failed.
+
+Net effect: on a system where this compatibility patch can't be safely installed, the mod
+now runs completely normally without it - the patch was only ever for CoMAP versions
+predating CoMAP's own 2.2.0 anyway, so skipping it doesn't lose current-CoMAP functionality.
 
 ## Building
 

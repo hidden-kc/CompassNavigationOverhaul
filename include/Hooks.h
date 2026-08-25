@@ -191,7 +191,7 @@ namespace hooks
 					{}
 				};
 
-				std::uintptr_t getCompassMovieDefHookAddress = SigScanner::FindPattern
+				std::uintptr_t getCompassMovieDefHookPattern = SigScanner::FindPattern
 				<
 					"4C 8B F1 "	// mov     r14, rcx
 					"48 8B 02 "	// mov     rax, [rdx]
@@ -199,12 +199,39 @@ namespace hooks
 					"FF 50 08 "	// call    qword ptr [rax+8]
 					"?? 8B ?? "	// mov     ??, rax
 					"48 85 C0"	// test    rax, rax
-				>(a_moduleHandle) + 6;
+				>(a_moduleHandle);
 
-				GetCompassMovieDefHook getCompassMovieDefHook{ getCompassMovieDefHookAddress };
+				// A CoMAP build whose compiled code doesn't match this pattern (a version this
+				// patch was never verified against) would otherwise silently become address
+				// 0 + 6 = 6 and get hooked there - not a hypothetical, this class of unchecked
+				// lookup is exactly what caused a real crash elsewhere in this project. Skip
+				// the patch instead of hooking a bogus address.
+				if (!getCompassMovieDefHookPattern)
+				{
+					logger::error("CoMAP compatibility: could not find the expected byte pattern in "
+								 "MapMarkerFramework.dll; skipping the compatibility patch for this version");
+
+					return;
+				}
+
+				GetCompassMovieDefHook getCompassMovieDefHook{ getCompassMovieDefHookPattern + 6 };
 
 				static CustomTrampoline mapMarkerFrameworkTrampoline{ "MapMarkerFramework Trampoline", a_moduleHandle,
 																	  getCompassMovieDefHook.getSize() };
+
+				// CustomTrampoline searches for free memory near MapMarkerFramework.dll's own
+				// module base and can genuinely fail to find any within displacement range,
+				// especially in a process with many other DLLs loaded - confirmed by a real
+				// in-game crash ("SKSE/Trampoline.h(287): displacement is out of range") before
+				// this check existed. Skip the patch rather than write through an unusable
+				// trampoline.
+				if (!mapMarkerFrameworkTrampoline.IsValid())
+				{
+					logger::error("CoMAP compatibility: could not reserve trampoline space near "
+								 "MapMarkerFramework.dll; skipping the compatibility patch");
+
+					return;
+				}
 
 				mapMarkerFrameworkTrampoline.write_call(getCompassMovieDefHook);
 			}

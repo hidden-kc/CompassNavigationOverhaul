@@ -7,6 +7,8 @@
 
 #include "SKSE/Trampoline.h"
 
+#include "utils/Logger.h"
+
 namespace hooks
 {
 	template <std::size_t SrcSize>
@@ -83,6 +85,13 @@ namespace hooks
 	class Trampoline
 	{
 	public:
+
+		// False if the underlying SKSE::Trampoline never got a real memory block to write
+		// into - CustomTrampoline leaves it this way rather than crashing when it can't find
+		// space near the target module. Check this before write_branch()/write_call() on
+		// anything built from CustomTrampoline; DefaultTrampoline always allocates
+		// successfully (SKSE::AllocTrampoline fails loudly on its own if it can't).
+		bool IsValid() const { return !inst->empty(); }
 
 		template <std::size_t SrcSize>
 		std::uintptr_t write_branch(Hook<SrcSize>& a_hook)
@@ -182,6 +191,25 @@ namespace hooks
 				{
 					break;
 				}
+			}
+
+			// The backward search above can genuinely fail to find a large-enough free block
+			// within displacement range of a_module, especially in a heavily-modded process
+			// with many DLLs loaded - this isn't hypothetical, it's what actually happened.
+			// Calling set_trampoline(nullptr, a_size, ...) anyway used to leave this
+			// Trampoline reporting a non-zero capacity with a null backing pointer, so the
+			// first write_branch()/write_call() through it would compute a displacement of
+			// roughly -(hook site address) and crash with "displacement is out of range"
+			// instead of failing here where the actual cause is obvious. Leave the
+			// underlying SKSE::Trampoline in its default (empty) state instead, so
+			// IsValid() correctly reports false and the caller can skip the hook.
+			if (!base)
+			{
+				logger::error("CustomTrampoline \"{}\": could not find {} free byte(s) within "
+							 "displacement range of module {:#x}; leaving this trampoline unusable",
+					a_name, a_size, moduleBase);
+
+				return;
 			}
 
 			inst->set_trampoline(base, a_size,
