@@ -181,7 +181,11 @@ namespace hooks
 
 			static RE::GFxMovieDef* GetCompassMovieDef();
 
-			static inline void Install(SKSE::WinAPI::HMODULE a_moduleHandle)
+			// Returns false when the patch was skipped, so the caller cannot announce a success
+			// that did not happen - it previously logged "Successfully loaded compatibility patch
+			// for CoMAP!" unconditionally, directly after this function had logged an error and
+			// bailed out.
+			static inline bool Install(SKSE::WinAPI::HMODULE a_moduleHandle)
 			{
 				// `ImportManager::SetupHUDMenu` call to a_movieView->GetMovieDef()
 				struct GetCompassMovieDefHook : Hook<6>
@@ -211,7 +215,7 @@ namespace hooks
 					logger::error("CoMAP compatibility: could not find the expected byte pattern in "
 								 "MapMarkerFramework.dll; skipping the compatibility patch for this version");
 
-					return;
+					return false;
 				}
 
 				GetCompassMovieDefHook getCompassMovieDefHook{ getCompassMovieDefHookPattern + 6 };
@@ -230,10 +234,12 @@ namespace hooks
 					logger::error("CoMAP compatibility: could not reserve trampoline space near "
 								 "MapMarkerFramework.dll; skipping the compatibility patch");
 
-					return;
+					return false;
 				}
 
 				mapMarkerFrameworkTrampoline.write_call(getCompassMovieDefHook);
+
+				return true;
 			}
 
 			static inline const SKSE::PluginInfo* pluginInfo = nullptr;

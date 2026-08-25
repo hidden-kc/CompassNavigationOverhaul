@@ -32,6 +32,9 @@ void SKSEMessageListener(SKSE::MessagingInterface::Message* a_msg)
 			logger::error("Infinity UI installation not detected. Please, download it from https://www.nexusmods.com/skyrimspecialedition/mods/74483");
 		}
 
+		// First attempt. RequestAPI() is idempotent and no-ops once it has succeeded, so it is
+		// retried at kDataLoaded below - CLAUDE.md rule 17. A single early miss used to leave
+		// NPC names silently degraded to vanilla for the rest of the session.
 		NND::NPCNameProvider::GetSingleton()->RequestAPI();
 
 		const SKSE::PluginInfo* mapMarkerFrameworkPluginInfo = skse->GetPluginInfo("MapMarkerFramework");
@@ -39,14 +42,26 @@ void SKSEMessageListener(SKSE::MessagingInterface::Message* a_msg)
 		if (mapMarkerFrameworkPluginInfo && mapMarkerFrameworkPluginInfo->version < 0x02020000)
 		{
 			logger::info("CoMAP detected. Loading compatibility patch...");
-			hooks::compat::MapMarkerFramework::Install(SKSE::WinAPI::GetModuleHandle("MapMarkerFramework.dll"));
-			hooks::compat::MapMarkerFramework::pluginInfo = mapMarkerFrameworkPluginInfo;
-			logger::info("Successfully loaded compatibility patch for CoMAP!");
+			if (hooks::compat::MapMarkerFramework::Install(SKSE::WinAPI::GetModuleHandle("MapMarkerFramework.dll")))
+			{
+				hooks::compat::MapMarkerFramework::pluginInfo = mapMarkerFrameworkPluginInfo;
+				logger::info("Successfully loaded compatibility patch for CoMAP!");
+			}
+			else
+			{
+				logger::warn("CoMAP compatibility patch was not applied; CoMAP and this mod will both run, unpatched");
+			}
 		}
 	}
 	else if (a_msg->type == SKSE::MessagingInterface::kPostPostLoad)
 	{
 		UI::Register();
+	}
+	else if (a_msg->type == SKSE::MessagingInterface::kDataLoaded)
+	{
+		// Second and last attempt at the NND API (CLAUDE.md rule 17). By kDataLoaded every
+		// plugin has finished loading, so if it is not available now it is not installed.
+		NND::NPCNameProvider::GetSingleton()->RequestAPI();
 	}
 }
 
