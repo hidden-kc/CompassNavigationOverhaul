@@ -1,6 +1,6 @@
 # Port notes — INI-only settings → SKSE Menu Framework
 
-**Version 1.0.1.** This is a fork of
+**Version 1.0.2.** This is a fork of
 [alexsylex/CompassNavigationOverhaul](https://github.com/alexsylex/CompassNavigationOverhaul)
 2.2.0 that adds an in-game settings page driven by
 [SKSE Menu Framework 3](https://github.com/QTR-Modding/SKSE-Menu-Framework-3), so the compass
@@ -64,6 +64,26 @@ isn't present here). Real instances fixed elsewhere:
 
 No known crash was ever reported for any of these in this mod specifically - this pass is
 preventative, following the same reasoning that caught the sibling mod's real bug.
+
+## 1.0.2: a real crash fix - trampoline undersized for a shared destination
+
+Confirmed by an actual in-game error dialog Liam hit on load: `SKSE/Trampoline.h(287):
+displacement is out of range`. `Hooks.h`'s `Install()` hooks two separate call sites inside
+`HUDMarkerManager::UpdateLocations` (`AllowedToShowMapMarkerHook::Address1()`/`Address2()`),
+both ultimately calling the same C++ destination function, `AllowedToShowMapMarker`. The
+trampoline size calculation reserved space for that hook only once, on the reasoning "the
+destination is the same, so allocate for it once" - but that conflates the *destination
+function* (genuinely shared) with the *trampoline stub* written per hook *site* (not
+shared): `write_call()` is invoked twice, for two different source addresses, and each call
+needs its own small indirect-jump stub written into trampoline-allocated memory near that
+specific hook site. Undersizing by one stub's worth meant the second `write_call()` ran out
+of reserved room, and whatever fallback allocation SKSE used for the overflow landed outside
+the ±2GB displacement range a near call/jmp can encode - hence the error, and the mod
+refusing to load at all. Fixed by sizing for both `allowedToShowMapMarkerHook[0]`/`[1]`
+explicitly rather than relying on the shared-destination reasoning, which was correct about
+the destination but wrong about what that implied for trampoline space. This bug predates
+the 1.0.1 null-safety audit - unrelated to those changes, just never exposed until this was
+actually loaded in game for the first time.
 
 ## Building
 

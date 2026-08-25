@@ -150,9 +150,16 @@ namespace hooks
 		UpdateEnemiesHook updateEnemiesHook{ UpdateEnemiesHook::Address() };
 		UpdatePlayerSetMarkerHook updatePlayerSetMarkerHook{ UpdatePlayerSetMarkerHook::Address() };
 		
-		// The destination of the hook for `AllowedToShowMapMarker` is the same,
-		// so we need to allocate memory for it only once
-		static DefaultTrampoline defaultTrampoline{ updateQuestsHook.getSize() + allowedToShowMapMarkerHook->getSize() +
+		// Two separate hook SITES (Address1()/Address2()) both call AllowedToShowMapMarker,
+		// so the C++ destination function is genuinely the same one - but each site still
+		// gets its own small trampoline stub (the indirect jmp written at the site itself),
+		// not a shared one, since write_call() is invoked twice below for two different
+		// source addresses. Sizing this for only one meant the trampoline ran out of room on
+		// the second write, and SKSE's fallback allocation for the overflow landed outside
+		// the +-2GB displacement range of the hook site - "displacement is out of range",
+		// confirmed by a real in-game crash on load.
+		static DefaultTrampoline defaultTrampoline{ updateQuestsHook.getSize() +
+													allowedToShowMapMarkerHook[0].getSize() + allowedToShowMapMarkerHook[1].getSize() +
 													updateLocationsHook.getSize() + updateEnemiesHook.getSize() +
 													updatePlayerSetMarkerHook.getSize() };
 		
