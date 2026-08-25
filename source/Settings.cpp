@@ -78,18 +78,243 @@ namespace settings
 			defaults.hideInCombat = questlist::hideInCombat;
 		}
 
-		// WritePrivateProfileString rewrites a single key in place, so the comments and any
-		// keys this plugin does not know about survive a save untouched.
+		// One key a Save() is about to write. Queued rather than written on the spot so the
+		// whole file is rewritten once at the end instead of once per key.
+		struct PendingWrite
+		{
+			std::string section;
+			std::string key;
+			std::string value;
+		};
+
+		std::vector<PendingWrite> pendingWrites;
+
+		bool EqualsIgnoreCase(std::string_view a_lhs, std::string_view a_rhs)
+		{
+			return std::ranges::equal(a_lhs, a_rhs, [](char a_l, char a_r) {
+				return std::tolower(static_cast<unsigned char>(a_l)) == std::tolower(static_cast<unsigned char>(a_r));
+			});
+		}
+
+		std::string_view Trim(std::string_view a_text)
+		{
+			constexpr std::string_view kSpace = " \t\r\n";
+
+			const std::size_t first = a_text.find_first_not_of(kSpace);
+
+			if (first == std::string_view::npos)
+			{
+				return {};
+			}
+
+			return a_text.substr(first, a_text.find_last_not_of(kSpace) - first + 1);
+		}
+
+		// Queues a key for the next FlushPendingWrites(). Cannot fail on its own - the file is
+		// only touched at flush time, so that is where a write error can surface.
 		bool WriteRaw(const char* a_section, const char* a_key, const std::string& a_value)
 		{
-			if (::WritePrivateProfileStringA(a_section, a_key, a_value.c_str(), iniPath.c_str()))
+			pendingWrites.emplace_back(a_section, a_key, a_value);
+
+			return true;
+		}
+
+		// Rewrites the INI with every queued change applied in place, leaving comments and any
+		// keys this plugin does not know about untouched.
+		//
+		// Deliberately plain file I/O rather than WritePrivateProfileString. Mod Organizer 2's
+		// usvfs does not reliably redirect the Win32 profile APIs: those calls returned success
+		// and the plugin logged a successful save, while the file on disk was never written -
+		// not in the mod folder, not in Overwrite - so every saved setting was silently lost on
+		// the next load. Ordinary file reads and writes go through the VFS correctly.
+		bool FlushPendingWrites()
+		{
+			if (pendingWrites.empty())
 			{
 				return true;
 			}
 
-			logger::error("Could not write {}={} to {} (error {})", a_key, a_value, iniPath, ::GetLastError());
+			std::string text;
 
-			return false;
+			{
+				std::ifstream in(iniPath, std::ios::binary);
+
+				if (in)
+				{
+					text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+				}
+				else
+				{
+					logger::warn("Could not read {} before saving; writing it from scratch", iniPath);
+				}
+			}
+
+			// Keep whatever line ending the file already uses, so a save does not rewrite every
+			// line of a CRLF file as LF (or the other way round) and bury the real change.
+			const std::string newline = text.find("\r\n") != std::string::npos ? "\r\n" : "\n";
+
+			std::vector<std::string> lines;
+
+			for (std::size_t start = 0; start <= text.size();)
+			{
+				const std::size_t end = text.find('\n', start);
+
+				if (end == std::string::npos)
+				{
+					if (start < text.size())
+					{
+						lines.emplace_back(text.substr(start));
+					}
+
+					break;
+				}
+
+				std::string line = text.substr(start, end - start);
+
+				if (!line.empty() && line.back() == '\r')
+				{
+					line.pop_back();
+				}
+
+				lines.push_back(std::move(line));
+				start = end + 1;
+			}
+
+			std::vector<bool> applied(pendingWrites.size(), false);
+
+			// Pass one: replace any key that is already present under its own section.
+			std::string currentSection;
+
+			for (std::string& line : lines)
+			{
+				const std::string_view trimmed = Trim(line);
+
+				if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']')
+				{
+					currentSection = std::string{ trimmed.substr(1, trimmed.size() - 2) };
+
+					continue;
+				}
+
+				if (trimmed.empty() || trimmed.front() == ';' || trimmed.front() == '#')
+				{
+					continue;
+				}
+
+				const std::size_t separator = line.find('=');
+
+				if (separator == std::string::npos)
+				{
+					continue;
+				}
+
+				const std::string_view key = Trim(std::string_view{ line }.substr(0, separator));
+
+				for (std::size_t i = 0; i < pendingWrites.size(); ++i)
+				{
+					if (applied[i] || !EqualsIgnoreCase(currentSection, pendingWrites[i].section) ||
+						!EqualsIgnoreCase(key, pendingWrites[i].key))
+					{
+						continue;
+					}
+
+					line = std::format("{}={}", key, pendingWrites[i].value);
+					applied[i] = true;
+
+					break;
+				}
+			}
+
+			// Pass two: anything still unapplied is a key (or a whole section) the file does not
+			// have yet, so append it at the end of its section, creating the section if needed.
+			for (std::size_t i = 0; i < pendingWrites.size(); ++i)
+			{
+				if (applied[i])
+				{
+					continue;
+				}
+
+				const PendingWrite& pending = pendingWrites[i];
+
+				std::size_t insertAt = lines.size();
+				bool sectionFound = false;
+
+				for (std::size_t l = 0; l < lines.size(); ++l)
+				{
+					const std::string_view trimmed = Trim(lines[l]);
+
+					if (trimmed.size() < 2 || trimmed.front() != '[' || trimmed.back() != ']')
+					{
+						continue;
+					}
+
+					if (sectionFound)
+					{
+						// The next section header - this key belongs just before it.
+						insertAt = l;
+
+						break;
+					}
+
+					if (EqualsIgnoreCase(trimmed.substr(1, trimmed.size() - 2), pending.section))
+					{
+						sectionFound = true;
+						insertAt = lines.size();
+					}
+				}
+
+				if (!sectionFound)
+				{
+					if (!lines.empty() && !Trim(lines.back()).empty())
+					{
+						lines.emplace_back();
+					}
+
+					lines.push_back(std::format("[{}]", pending.section));
+					insertAt = lines.size();
+				}
+
+				// Step back over trailing blank lines so the key lands with its own section
+				// rather than in the gap before the next one.
+				while (insertAt > 0 && Trim(lines[insertAt - 1]).empty())
+				{
+					--insertAt;
+				}
+
+				lines.insert(lines.begin() + insertAt, std::format("{}={}", pending.key, pending.value));
+				applied[i] = true;
+			}
+
+			std::string output;
+
+			for (const std::string& line : lines)
+			{
+				output += line;
+				output += newline;
+			}
+
+			std::ofstream out(iniPath, std::ios::binary | std::ios::trunc);
+
+			if (!out)
+			{
+				logger::error("Could not open {} for writing; settings were not saved", iniPath);
+
+				return false;
+			}
+
+			out.write(output.data(), static_cast<std::streamsize>(output.size()));
+			out.close();
+
+			if (!out)
+			{
+				logger::error("Could not write {}; settings were not saved", iniPath);
+
+				return false;
+			}
+
+			logger::debug("FlushPendingWrites: wrote {} key(s) to {}", pendingWrites.size(), iniPath);
+
+			return true;
 		}
 
 		bool WriteFloat(const char* a_section, const char* a_key, float a_value)
@@ -283,6 +508,10 @@ namespace settings
 
 		bool ok = true;
 
+		// Anything left over from an earlier Save() has already been flushed; starting clean
+		// keeps a failed flush from writing a stale value on the next attempt.
+		pendingWrites.clear();
+
 		ok &= WriteUInt(kDebugSection, "uLogLevel", static_cast<std::uint32_t>(debug::logLevel));
 
 		ok &= WriteBool(kDisplaySection, "bUseMetricUnits", display::useMetricUnits);
@@ -308,13 +537,19 @@ namespace settings
 		ok &= WriteFloat(kQuestListSection, "fSprintingDelayToShow", questlist::sprintingDelayToShow);
 		ok &= WriteBool(kQuestListSection, "bHideInCombat", questlist::hideInCombat);
 
-		// Flush the cached INI writes so the file on disk is up to date even if the game is
-		// closed the hard way straight afterwards.
-		::WritePrivateProfileStringA(nullptr, nullptr, nullptr, iniPath.c_str());
+		// Write the file once, with every queued key applied. Until this succeeds nothing has
+		// reached disk, so its result - not the queueing above - decides whether Save() worked.
+		ok &= FlushPendingWrites();
+
+		pendingWrites.clear();
 
 		if (ok)
 		{
 			logger::info("Saved settings to {}", iniPath);
+		}
+		else
+		{
+			logger::error("Failed to save settings to {}", iniPath);
 		}
 
 		return ok;

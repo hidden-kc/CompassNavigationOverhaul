@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
 	CompassNavigationOverhaul
-	VERSION 1.0.3
+	VERSION 1.0.4
 	LANGUAGES CXX
 )
 
@@ -55,6 +55,14 @@ target_link_libraries(
 		CommonLibSSE::CommonLibSSE
 		spdlog::spdlog_header_only
 		Microsoft::DirectXTK
+)
+
+# version.rc is configured above but was never compiled into the target, so the built DLL
+# carried an empty Windows file-version resource. Matches LocalMapUpgrade/DragonsEyeMinimap.
+target_sources(
+	${PROJECT_NAME}
+	PRIVATE
+	${CMAKE_CURRENT_BINARY_DIR}/version.rc
 )
 
 if (MSVC)

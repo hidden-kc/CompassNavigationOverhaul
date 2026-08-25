@@ -38,7 +38,7 @@ namespace settings
 	namespace display
 	{
 		inline bool useMetricUnits = false;
-		inline bool showUndiscoveredLocationMarkers = true;
+		inline bool showUndiscoveredLocationMarkers = false;
 		inline bool undiscoveredMeansUnknownMarkers = true;
 		inline bool undiscoveredMeansUnknownInfo = true;
 		inline bool showEnemyMarkers = true;
@@ -48,19 +48,19 @@ namespace settings
 		inline bool showInteriorMarkers = true;
 		inline float angleToShowMarkerDetails = 10.0F;
 		inline float angleToKeepMarkerDetailsShown = 35.0F;
-		inline float focusingDelayToShow = 0.1F;
+		inline float focusingDelayToShow = 0.07F;
 	}
 
 	namespace questlist
 	{
 		inline float positionX = 0.008F;
 		inline float positionY = 0.125F;
-		inline float maxHeight = 0.5F;
+		inline float maxHeight = 0.675F;
 		inline bool showInExteriors = true;
 		inline bool showInInteriors = true;
 		inline float walkingDelayToShow = 0.0F;
 		inline float joggingDelayToShow = 1.0F;
 		inline float sprintingDelayToShow = 1.5F;
-		inline bool hideInCombat = false;
+		inline bool hideInCombat = true;
 	}
 }
