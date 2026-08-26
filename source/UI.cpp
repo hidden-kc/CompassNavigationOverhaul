@@ -8,11 +8,16 @@
 #include "utils/Logger.h"
 #include "utils/Toggle.h"
 
+#include <algorithm>
+
 namespace UI
 {
 	namespace
 	{
 		std::string statusMessage;
+
+		// The slider the arrow keys currently drive. Set by clicking one.
+		std::string selectedSlider;
 
 		constexpr const char* kLogLevelNames[] = { "Trace", "Debug", "Info", "Warning", "Error", "Critical", "Off" };
 		constexpr int kLogLevelCount = 7;
@@ -46,6 +51,11 @@ namespace UI
 				"igCheckbox",
 				"igCombo_Str_arr",
 				"igSliderFloat",
+				// Needed by NudgeableSlider's arrow-key nudge (ported from Dragon's Eye
+				// Minimap's UI.cpp - CLAUDE.md rule 24).
+				"igIsKeyPressed_Bool",
+				"igIsItemClicked",
+				"igIsItemActive",
 				"igIsItemHovered",
 				"igButton",
 				"igSameLine",
@@ -75,6 +85,47 @@ namespace UI
 			}
 
 			return true;
+		}
+
+		// A slider that the arrow keys can also nudge, once it has been clicked. Dragging is
+		// hopeless for the last decimal place, and the framework does not turn on ImGui's own
+		// keyboard navigation, so this tracks the selection itself rather than changing a
+		// setting shared with every other mod's page. Ported verbatim from Dragon's Eye
+		// Minimap's UI.cpp, which already had this working - see CLAUDE.md rule 24.
+		bool NudgeableSlider(const char* a_label, float* a_value, float a_min, float a_max,
+							 const char* a_format, float a_step)
+		{
+			bool changed = ImGuiMCP::SliderFloat(a_label, a_value, a_min, a_max, a_format);
+
+			if (ImGuiMCP::IsItemClicked() || ImGuiMCP::IsItemActive())
+			{
+				selectedSlider = a_label;
+			}
+
+			if (selectedSlider == a_label)
+			{
+				float nudge = 0.0F;
+
+				if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_LeftArrow))
+				{
+					nudge -= a_step;
+				}
+				if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_RightArrow))
+				{
+					nudge += a_step;
+				}
+
+				if (nudge != 0.0F)
+				{
+					*a_value = std::clamp(*a_value + nudge, a_min, a_max);
+					changed = true;
+				}
+
+				ImGuiMCP::SameLine();
+				ImGuiMCP::TextDisabled("<-->");
+			}
+
+			return changed;
 		}
 
 		void HelpMarker(const char* a_description)
@@ -123,11 +174,11 @@ namespace UI
 			ImGuiMCP::Toggle("Show objective as target", &showObjectiveAsTarget);
 			ImGuiMCP::Toggle("Show other objectives count", &showOtherObjectivesCount);
 
-			ImGuiMCP::SliderFloat("Angle to show marker details", &angleToShowMarkerDetails, 0.0F, 90.0F, "%.0f");
+			NudgeableSlider("Angle to show marker details", &angleToShowMarkerDetails, 0.0F, 90.0F, "%.0f", 1.0F);
 			HelpMarker("How close to the center of the compass a marker has to be before its name and distance appear.");
-			ImGuiMCP::SliderFloat("Angle to keep marker details shown", &angleToKeepMarkerDetailsShown, 0.0F, 90.0F, "%.0f");
+			NudgeableSlider("Angle to keep marker details shown", &angleToKeepMarkerDetailsShown, 0.0F, 90.0F, "%.0f", 1.0F);
 			HelpMarker("Once shown, a marker's details stay visible until it drifts past this wider angle - keeps the text from flickering right at the threshold.");
-			ImGuiMCP::SliderFloat("Focusing delay to show", &focusingDelayToShow, 0.0F, 2.0F, "%.2f");
+			NudgeableSlider("Focusing delay to show", &focusingDelayToShow, 0.0F, 2.0F, "%.2f", 0.01F);
 			HelpMarker("How long a marker has to stay within the angle above before its details appear.");
 		}
 
@@ -137,18 +188,18 @@ namespace UI
 
 			ImGuiMCP::SeparatorText("Quest list");
 
-			ImGuiMCP::SliderFloat("Position X", &positionX, 0.0F, 1.0F, "%.3f");
-			ImGuiMCP::SliderFloat("Position Y", &positionY, 0.0F, 1.0F, "%.3f");
-			ImGuiMCP::SliderFloat("Max height", &maxHeight, 0.0F, 1.0F, "%.2f");
+			NudgeableSlider("Position X", &positionX, 0.0F, 1.0F, "%.3f", 0.01F);
+			NudgeableSlider("Position Y", &positionY, 0.0F, 1.0F, "%.3f", 0.01F);
+			NudgeableSlider("Max height", &maxHeight, 0.0F, 1.0F, "%.2f", 0.01F);
 
 			ImGuiMCP::Toggle("Show in exteriors", &showInExteriors);
 			ImGuiMCP::Toggle("Show in interiors", &showInInteriors);
 			ImGuiMCP::Toggle("Hide in combat", &hideInCombat);
 			HelpMarker("Hides the quest list entirely while a weapon or spell is drawn.");
 
-			ImGuiMCP::SliderFloat("Walking delay to show", &walkingDelayToShow, 0.0F, 3.0F, "%.2f");
-			ImGuiMCP::SliderFloat("Jogging delay to show", &joggingDelayToShow, 0.0F, 3.0F, "%.2f");
-			ImGuiMCP::SliderFloat("Sprinting delay to show", &sprintingDelayToShow, 0.0F, 3.0F, "%.2f");
+			NudgeableSlider("Walking delay to show", &walkingDelayToShow, 0.0F, 3.0F, "%.2f", 0.01F);
+			NudgeableSlider("Jogging delay to show", &joggingDelayToShow, 0.0F, 3.0F, "%.2f", 0.01F);
+			NudgeableSlider("Sprinting delay to show", &sprintingDelayToShow, 0.0F, 3.0F, "%.2f", 0.01F);
 			HelpMarker("How long you have to move at each pace before the quest list fades in.");
 		}
 
