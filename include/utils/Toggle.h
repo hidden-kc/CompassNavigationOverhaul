@@ -34,9 +34,9 @@ namespace ImGuiMCP
 {
 	// Hand-drawn pill track (~2:1 width:height) with a circular knob that occupies most of the
 	// track's height, sliding left when off / right when on. The track color itself differs
-	// between states - dim/muted gray off, an accent teal on - so the state reads even without
-	// watching the knob move. No animation: the knob jumps straight to its new position, which
-	// reads as instant given SMF redraws every frame anyway.
+	// between states - red off, green on - so the state reads even without watching the knob
+	// move. No animation: the knob jumps straight to its new position, which reads as instant
+	// given SMF redraws every frame anyway.
 	inline bool Toggle(const char* a_label, bool* a_value)
 	{
 		PushID(a_label);
@@ -58,10 +58,10 @@ namespace ImGuiMCP
 
 		const bool isOn = a_value && *a_value;
 
-		// Muted/dim gray when off, accent teal when on; a hovered track brightens slightly so
-		// the widget still reads as interactive without needing the knob to move first.
-		const ImU32 trackColor = isOn ? (hovered ? IM_COL32(58, 184, 158, 255) : IM_COL32(45, 158, 135, 255))
-		                               : (hovered ? IM_COL32(90, 90, 96, 255) : IM_COL32(68, 68, 74, 255));
+		// Green when on, red when off; a hovered track brightens slightly so the widget still
+		// reads as interactive without needing the knob to move first.
+		const ImU32 trackColor = isOn ? (hovered ? IM_COL32(92, 191, 96, 255) : IM_COL32(76, 175, 80, 255))
+		                               : (hovered ? IM_COL32(207, 84, 84, 255) : IM_COL32(191, 68, 68, 255));
 
 		const float knobX = pos.x + radius + (isOn ? (width - height) : 0.0f);
 

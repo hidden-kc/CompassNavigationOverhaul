@@ -123,7 +123,8 @@ namespace UI
 
 			const auto code = static_cast<std::int32_t>(buttonEvent->GetIDCode());
 
-			if (code != RE::BSKeyboardDevice::Keys::kLeft && code != RE::BSKeyboardDevice::Keys::kRight)
+			if (code != RE::BSKeyboardDevice::Keys::kLeft && code != RE::BSKeyboardDevice::Keys::kRight &&
+				code != RE::BSKeyboardDevice::Keys::kUp && code != RE::BSKeyboardDevice::Keys::kDown)
 			{
 				return false;
 			}
@@ -153,11 +154,11 @@ namespace UI
 			{
 				float nudge = 0.0F;
 
-				if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_LeftArrow))
+				if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_LeftArrow) || ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_DownArrow))
 				{
 					nudge -= a_step;
 				}
-				if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_RightArrow))
+				if (ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_RightArrow) || ImGuiMCP::IsKeyPressed(ImGuiMCP::ImGuiKey_UpArrow))
 				{
 					nudge += a_step;
 				}
