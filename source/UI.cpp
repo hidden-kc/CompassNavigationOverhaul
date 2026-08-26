@@ -6,6 +6,7 @@
 #include "Settings.h"
 
 #include "utils/Logger.h"
+#include "utils/Toggle.h"
 
 namespace UI
 {
@@ -50,7 +51,17 @@ namespace UI
 				"igSameLine",
 				"igSpacing",
 				"igPushItemWidth",
-				"igPopItemWidth"
+				"igPopItemWidth",
+				// Toggle() - the on/off switch every boolean setting now renders as
+				// instead of a tick-box (utils/Toggle.h, CLAUDE.md rule 32).
+				"igGetCursorScreenPos",
+				"igGetWindowDrawList",
+				"igGetFrameHeight",
+				"igInvisibleButton",
+				"igPushID_Str",
+				"igPopID",
+				"ImDrawList_AddRectFilled",
+				"ImDrawList_AddCircleFilled"
 			};
 
 			for (const char* name : required)
@@ -93,24 +104,24 @@ namespace UI
 
 			ImGuiMCP::SeparatorText("Compass and markers");
 
-			if (ImGuiMCP::Checkbox("Use metric units", &useMetricUnits))
+			if (ImGuiMCP::Toggle("Use metric units", &useMetricUnits))
 			{
 				ApplyUseMetricUnits();
 			}
 			HelpMarker("Shows distances to markers in meters instead of the vanilla feet.");
 
-			ImGuiMCP::Checkbox("Show undiscovered location markers", &showUndiscoveredLocationMarkers);
-			ImGuiMCP::Checkbox("Undiscovered means unknown marker", &undiscoveredMeansUnknownMarkers);
+			ImGuiMCP::Toggle("Show undiscovered location markers", &showUndiscoveredLocationMarkers);
+			ImGuiMCP::Toggle("Undiscovered means unknown marker", &undiscoveredMeansUnknownMarkers);
 			HelpMarker("Shows a generic marker instead of the location's real icon until you discover it.");
-			ImGuiMCP::Checkbox("Undiscovered means unknown info", &undiscoveredMeansUnknownInfo);
+			ImGuiMCP::Toggle("Undiscovered means unknown info", &undiscoveredMeansUnknownInfo);
 			HelpMarker("Hides the location's name and distance on the compass until you discover it.");
 
-			ImGuiMCP::Checkbox("Show enemy markers", &showEnemyMarkers);
-			ImGuiMCP::Checkbox("Show enemy name under marker", &showEnemyNameUnderMarker);
-			ImGuiMCP::Checkbox("Show interior markers", &showInteriorMarkers);
+			ImGuiMCP::Toggle("Show enemy markers", &showEnemyMarkers);
+			ImGuiMCP::Toggle("Show enemy name under marker", &showEnemyNameUnderMarker);
+			ImGuiMCP::Toggle("Show interior markers", &showInteriorMarkers);
 
-			ImGuiMCP::Checkbox("Show objective as target", &showObjectiveAsTarget);
-			ImGuiMCP::Checkbox("Show other objectives count", &showOtherObjectivesCount);
+			ImGuiMCP::Toggle("Show objective as target", &showObjectiveAsTarget);
+			ImGuiMCP::Toggle("Show other objectives count", &showOtherObjectivesCount);
 
 			ImGuiMCP::SliderFloat("Angle to show marker details", &angleToShowMarkerDetails, 0.0F, 90.0F, "%.0f");
 			HelpMarker("How close to the center of the compass a marker has to be before its name and distance appear.");
@@ -130,9 +141,9 @@ namespace UI
 			ImGuiMCP::SliderFloat("Position Y", &positionY, 0.0F, 1.0F, "%.3f");
 			ImGuiMCP::SliderFloat("Max height", &maxHeight, 0.0F, 1.0F, "%.2f");
 
-			ImGuiMCP::Checkbox("Show in exteriors", &showInExteriors);
-			ImGuiMCP::Checkbox("Show in interiors", &showInInteriors);
-			ImGuiMCP::Checkbox("Hide in combat", &hideInCombat);
+			ImGuiMCP::Toggle("Show in exteriors", &showInExteriors);
+			ImGuiMCP::Toggle("Show in interiors", &showInInteriors);
+			ImGuiMCP::Toggle("Hide in combat", &hideInCombat);
 			HelpMarker("Hides the quest list entirely while a weapon or spell is drawn.");
 
 			ImGuiMCP::SliderFloat("Walking delay to show", &walkingDelayToShow, 0.0F, 3.0F, "%.2f");
