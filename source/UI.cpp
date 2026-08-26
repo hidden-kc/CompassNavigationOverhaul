@@ -19,6 +19,14 @@ namespace UI
 		// The slider the arrow keys currently drive. Set by clicking one.
 		std::string selectedSlider;
 
+		// Mirrors !selectedSlider.empty(), but readable from OnInputEvent below, which the
+		// framework runs on its own input thread - selectedSlider itself is a plain
+		// std::string with no such guarantee, so this is the thread-safe version of the same
+		// fact. Written by NudgeableSlider on the render thread whenever it selects a slider.
+		std::atomic<bool> sliderSelected{ false };
+
+		SKSEMenuFramework::Model::InputEvent* inputHook = nullptr;
+
 		constexpr const char* kLogLevelNames[] = { "Trace", "Debug", "Info", "Warning", "Error", "Critical", "Off" };
 		constexpr int kLogLevelCount = 7;
 
@@ -87,6 +95,44 @@ namespace UI
 			return true;
 		}
 
+		// Runs on the framework's input thread (see the note on sliderSelected above for why
+		// that matters here). Swallows a left/right arrow press while a NudgeableSlider is
+		// selected, so it does not also reach whatever else on-screen treats an arrow key as
+		// gamepad-equivalent menu navigation. This only touches the RE::InputEvent the game
+		// itself sees; ImGui reads its own key state through the framework's separate hook, so
+		// NudgeableSlider's own nudge still happens exactly as before regardless of what this
+		// returns. Ported from Dragon's Eye Minimap's UI.cpp - CLAUDE.md rule 24.
+		bool __stdcall OnInputEvent(RE::InputEvent* a_event)
+		{
+			if (!sliderSelected.load())
+			{
+				return false;
+			}
+
+			auto* buttonEvent = a_event ? a_event->AsButtonEvent() : nullptr;
+
+			if (!buttonEvent || !buttonEvent->IsPressed())
+			{
+				return false;
+			}
+
+			if (buttonEvent->GetDevice() != RE::INPUT_DEVICE::kKeyboard)
+			{
+				return false;
+			}
+
+			const auto code = static_cast<std::int32_t>(buttonEvent->GetIDCode());
+
+			if (code != RE::BSKeyboardDevice::Keys::kLeft && code != RE::BSKeyboardDevice::Keys::kRight)
+			{
+				return false;
+			}
+
+			logger::trace("OnInputEvent: swallowing arrow key {} - a slider is selected", code);
+
+			return true;
+		}
+
 		// A slider that the arrow keys can also nudge, once it has been clicked. Dragging is
 		// hopeless for the last decimal place, and the framework does not turn on ImGui's own
 		// keyboard navigation, so this tracks the selection itself rather than changing a
@@ -100,6 +146,7 @@ namespace UI
 			if (ImGuiMCP::IsItemClicked() || ImGuiMCP::IsItemActive())
 			{
 				selectedSlider = a_label;
+				sliderSelected.store(true);
 			}
 
 			if (selectedSlider == a_label)
@@ -287,6 +334,18 @@ namespace UI
 						 "quest list in game.");
 
 			return;
+		}
+
+		// Keeps an arrow key nudging a selected slider from also reaching the game's own
+		// gamepad-equivalent menu navigation underneath - see OnInputEvent's own comment.
+		if (GetMenuFrameworkFunction<void*>("RegisterInpoutEvent"))
+		{
+			inputHook = SKSEMenuFramework::AddInputEvent(OnInputEvent);
+		}
+		else
+		{
+			logger::info("SKSE Menu Framework does not export \"RegisterInpoutEvent\"; an arrow "
+						 "key nudging a slider may also move menu navigation underneath");
 		}
 
 		SKSEMenuFramework::SetSection("Compass Navigation Overhaul");
