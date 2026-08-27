@@ -1,5 +1,7 @@
 #include "Settings.h"
 
+#include "Diagnostics.h"
+
 #include "IUI/API.h"
 #include "NND/NPCNameProvider.h"
 
@@ -21,13 +23,24 @@ void InfinityUIMessageListener(SKSE::MessagingInterface::Message* a_msg);
 void SKSEMessageListener(SKSE::MessagingInterface::Message* a_msg)
 {
 	// If all plugins have been loaded
-	if (a_msg->type == SKSE::MessagingInterface::kPostLoad) 
+	if (a_msg->type == SKSE::MessagingInterface::kPostLoad)
 	{
-		if (SKSE::GetMessagingInterface()->RegisterListener("InfinityUI", InfinityUIMessageListener)) 
+		// DevBenchAPI's own contract: the interface can only be requested once SKSE has sent
+		// kPostLoad, since that's the earliest point every plugin (DevBench included) has had
+		// its own SKSEPluginLoad run.
+		logger::debug("kPostLoad received; registering live diagnostics with DevBench if present");
+		diagnostics::Init();
+
+		const bool infinityUiRegistered =
+			SKSE::GetMessagingInterface()->RegisterListener("InfinityUI", InfinityUIMessageListener);
+
+		diagnostics::RecordInfinityUiListener(infinityUiRegistered);
+
+		if (infinityUiRegistered)
 		{
 			logger::info("Successfully registered for Infinity UI messages!");
 		}
-		else 
+		else
 		{
 			logger::error("Infinity UI installation not detected. Please, download it from https://www.nexusmods.com/skyrimspecialedition/mods/74483");
 		}
@@ -39,6 +52,9 @@ void SKSEMessageListener(SKSE::MessagingInterface::Message* a_msg)
 
 		const SKSE::PluginInfo* mapMarkerFrameworkPluginInfo = skse->GetPluginInfo("MapMarkerFramework");
 
+		diagnostics::RecordComapDetection(mapMarkerFrameworkPluginInfo != nullptr,
+			mapMarkerFrameworkPluginInfo ? mapMarkerFrameworkPluginInfo->version : 0);
+
 		if (mapMarkerFrameworkPluginInfo && mapMarkerFrameworkPluginInfo->version < 0x02020000)
 		{
 			logger::info("CoMAP detected. Loading compatibility patch...");
@@ -46,22 +62,55 @@ void SKSEMessageListener(SKSE::MessagingInterface::Message* a_msg)
 			{
 				hooks::compat::MapMarkerFramework::pluginInfo = mapMarkerFrameworkPluginInfo;
 				logger::info("Successfully loaded compatibility patch for CoMAP!");
+
+				diagnostics::RecordComapPatchApplied();
 			}
 			else
 			{
 				logger::warn("CoMAP compatibility patch was not applied; CoMAP and this mod will both run, unpatched");
+
+				// No RecordComapPatchSkipped() here on purpose: both of Install()'s own
+				// `return false` paths record their specific reason at the point the decision
+				// was actually made. Restating it from out here could only make it vaguer, or
+				// worse, overwrite the real reason with a guess.
 			}
+		}
+		else if (mapMarkerFrameworkPluginInfo)
+		{
+			// CoMAP 2.2.0.0 and later handles the compass movie def itself, so there is nothing
+			// to patch. Explicitly "not attempted" rather than "skipped" - nothing went wrong.
+			logger::info("CoMAP is installed but needs no compatibility patch at this version; not attempting it");
+
+			diagnostics::RecordComapPatchNotAttempted(
+				"MapMarkerFramework (CoMAP) is installed but its version is 2.2.0.0 or newer, "
+				"which handles the compass itself and needs no patch");
+		}
+		else
+		{
+			logger::debug("MapMarkerFramework (CoMAP) is not installed; no compatibility patch needed");
+
+			diagnostics::RecordComapPatchNotAttempted("MapMarkerFramework (CoMAP) is not installed");
 		}
 	}
 	else if (a_msg->type == SKSE::MessagingInterface::kPostPostLoad)
 	{
 		UI::Register();
+
+		// Rule-17 retry: a real launch showed devbench's own server can still be finishing
+		// startup a moment after kPostLoad fires, which is early enough to lose the race even
+		// though kPostLoad is DevBenchAPI's own documented earliest-safe point. Cheap no-op if
+		// the kPostLoad attempt already succeeded.
+		diagnostics::Init();
 	}
 	else if (a_msg->type == SKSE::MessagingInterface::kDataLoaded)
 	{
 		// Second and last attempt at the NND API (CLAUDE.md rule 17). By kDataLoaded every
 		// plugin has finished loading, so if it is not available now it is not installed.
 		NND::NPCNameProvider::GetSingleton()->RequestAPI();
+
+		// Last retry point - if DevBench still isn't found here, conclude it isn't installed
+		// and say so, rather than staying silent about it forever.
+		diagnostics::Init(/* a_lastAttempt = */ true);
 	}
 }
 
@@ -107,6 +156,7 @@ void InfinityUIMessageListener(SKSE::MessagingInterface::Message* a_msg)
 		{
 		case IUI::API::Message::Type::kStartLoadInstances:
 			logger::info("Started loading HUD patches");
+			diagnostics::RecordHudPatchStarted();
 			break;
 		case IUI::API::Message::Type::kPreReplaceInstance:
 			if (auto preReplaceMessage = IUI::API::TranslateAs<IUI::API::PreReplaceInstanceMessage>(a_msg))
@@ -149,6 +199,8 @@ void InfinityUIMessageListener(SKSE::MessagingInterface::Message* a_msg)
 					// if not, there has been an error
 					if (auto compass = CNO::Compass::GetSingleton())
 					{
+						diagnostics::RecordCompassInstanceReady(true);
+
 						compass->SetupMod(postPatchMessage->newInstance);
 						compass->SetUnits(settings::display::useMetricUnits);
 							
@@ -166,6 +218,8 @@ void InfinityUIMessageListener(SKSE::MessagingInterface::Message* a_msg)
 					else
 					{
 						logger::error("Compass instance counterpart not ready for {}", CNO::Compass::path);
+
+						diagnostics::RecordCompassInstanceReady(false);
 					}
 				}
 				else if (pathToNew == QuestItemList::path)
@@ -176,6 +230,8 @@ void InfinityUIMessageListener(SKSE::MessagingInterface::Message* a_msg)
 					// guaranteed to have set the singleton by the time we read it back here.
 					if (auto questItemList = QuestItemList::GetSingleton())
 					{
+						diagnostics::RecordQuestItemListReady(true);
+
 						memberLogger.LogMembersOf(*questItemList);
 
 						RE::GPointF coord = questItemList->LocalToGlobal();
@@ -184,6 +240,8 @@ void InfinityUIMessageListener(SKSE::MessagingInterface::Message* a_msg)
 					else
 					{
 						logger::error("QuestItemList singleton could not be initialized for {}", QuestItemList::path);
+
+						diagnostics::RecordQuestItemListReady(false);
 					}
 				}
 			}
@@ -209,6 +267,7 @@ void InfinityUIMessageListener(SKSE::MessagingInterface::Message* a_msg)
 				}
 			}
 			logger::info("Finished loading HUD patches");
+			diagnostics::RecordHudPatchFinished();
 			break;
 		case IUI::API::Message::Type::kPostInitExtensions:
 			if (auto postInitExtMessage = IUI::API::TranslateAs<IUI::API::PostInitExtensionsMessage>(a_msg))

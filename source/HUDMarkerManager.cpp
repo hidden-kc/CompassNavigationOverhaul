@@ -1,5 +1,7 @@
 #include "HUDMarkerManager.h"
 
+#include "Diagnostics.h"
+
 #include "RE/B/BSTimer.h"
 
 #include "RE/I/IMenu.h"
@@ -11,6 +13,10 @@ namespace CNO
 	void HUDMarkerManager::ProcessQuestMarker(RE::TESQuest* a_quest, RE::BGSInstancedQuestObjective* a_questObjective,
 											  int a_questAgeIndex, RE::TESObjectREFR* a_marker, std::uint32_t a_markerIcon)
 	{
+		// A bare counter increment, deliberately: the game's own marker loop calls this once per
+		// quest marker per frame, so anything that allocated here would be on the HUD path.
+		diagnostics::RecordQuestMarkerProcessed();
+
 		float angleToPlayerCamera = GetAngleBetween(playerCamera, a_marker);
 
 		if ((IsTheFocusedMarker(a_marker) && angleToPlayerCamera < keepFocusedAngle) ||
@@ -94,6 +100,8 @@ namespace CNO
 	void HUDMarkerManager::ProcessLocationMarker(RE::ExtraMapMarker* a_mapMarker, RE::TESObjectREFR* a_marker,
 												 std::uint32_t a_markerIcon)
 	{
+		diagnostics::RecordLocationMarkerProcessed();
+
 		float angleToPlayerCamera = GetAngleBetween(playerCamera, a_marker);
 
 		bool isDiscoveredLocation = a_mapMarker->mapData->flags.all(RE::MapMarkerData::Flag::kVisible);
@@ -119,6 +127,8 @@ namespace CNO
 
 	void HUDMarkerManager::ProcessEnemyMarker(RE::Character* a_enemy, std::uint32_t a_markerIcon)
 	{
+		diagnostics::RecordEnemyMarkerProcessed();
+
 		float angleToPlayerCamera = GetAngleBetween(playerCamera, a_enemy);
 
 		if ((IsTheFocusedMarker(a_enemy) && angleToPlayerCamera < keepFocusedAngle) ||
@@ -134,6 +144,8 @@ namespace CNO
 
 	void HUDMarkerManager::ProcessPlayerSetMarker(RE::TESObjectREFR* a_marker, std::uint32_t a_markerIcon)
 	{
+		diagnostics::RecordPlayerSetMarkerProcessed();
+
 		float angleToPlayerCamera = GetAngleBetween(playerCamera, a_marker);
 
 		if ((IsTheFocusedMarker(a_marker) && angleToPlayerCamera < keepFocusedAngle) ||
@@ -158,6 +170,9 @@ namespace CNO
 		{
 			logger::error("Compass singleton not ready; skipping this frame's compass update");
 
+			diagnostics::RecordCompassUpdateSkipped("the Compass singleton was not ready (the Infinity UI "
+													"HUD patch has not delivered the replaced instance yet)");
+
 			return;
 		}
 
@@ -167,6 +182,9 @@ namespace CNO
 		{
 			logger::error("QuestItemList singleton not ready; skipping this frame's compass update");
 
+			diagnostics::RecordCompassUpdateSkipped("the QuestItemList singleton was not ready (the Infinity UI "
+													"HUD patch has not delivered the replaced instance yet)");
+
 			return;
 		}
 
@@ -174,6 +192,12 @@ namespace CNO
 
 		if (focusChanged)
 		{
+			// Recorded here rather than per frame on purpose: this is the one place a marker
+			// description is worth copying, because focus changes are user-paced. UpdateFocusedMarker()
+			// has already swapped focusedMarker over, so this is the marker now being focused.
+			diagnostics::RecordFocusChanged(focusedMarker ? std::string_view{ focusedMarker->description } :
+														    std::string_view{});
+
 			compass->UnfocusMarker();
 			timeFocusingMarker = 0.0F;
 		}
@@ -286,6 +310,12 @@ namespace CNO
 				questItemList->Update();
 			}
 		}
+
+		// Snapshot before the clears below, so these are the counts this frame actually worked
+		// with. All three are sizes the update already maintains, so this costs a lock and three
+		// loads - nothing is walked or copied.
+		diagnostics::RecordCompassUpdate(facedMarkers.size(), questItems.size(), miscQuestItem.size(),
+			focusedMarker != nullptr);
 
 		facedMarkers.clear();
 		questItems.clear();

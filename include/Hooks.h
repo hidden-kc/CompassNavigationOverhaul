@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Diagnostics.h"
+
 #include "utils/Trampoline.h"
 
 #include "RE/B/BSCoreTypes.h"
@@ -66,6 +68,10 @@ namespace hooks
 
 	static inline void Install()
 	{
+		// Recorded before anything is written, so a status query after a partial install can
+		// tell "hooks::Install() never ran" apart from "it ran and stopped part way".
+		diagnostics::RecordHookInstallStarted();
+
 		// `HUDMarkerManager::UpdateQuests` (call to `HUDMarkerManager::AddMarker`)
 		struct UpdateQuestsHook : Hook<5>
 		{
@@ -158,19 +164,40 @@ namespace hooks
 		// the second write, and SKSE's fallback allocation for the overflow landed outside
 		// the +-2GB displacement range of the hook site - "displacement is out of range",
 		// confirmed by a real in-game crash on load.
-		static DefaultTrampoline defaultTrampoline{ updateQuestsHook.getSize() +
-													allowedToShowMapMarkerHook[0].getSize() + allowedToShowMapMarkerHook[1].getSize() +
-													updateLocationsHook.getSize() + updateEnemiesHook.getSize() +
-													updatePlayerSetMarkerHook.getSize() };
-		
+		const std::size_t trampolineBytes = updateQuestsHook.getSize() +
+											allowedToShowMapMarkerHook[0].getSize() + allowedToShowMapMarkerHook[1].getSize() +
+											updateLocationsHook.getSize() + updateEnemiesHook.getSize() +
+											updatePlayerSetMarkerHook.getSize();
+
+		static DefaultTrampoline defaultTrampoline{ trampolineBytes };
+
+		// IsValid() is the only honest "did this work" signal available here - SKSE's own
+		// write_branch/write_call have no return value that means failure, they simply write.
+		diagnostics::RecordTrampolineAllocated(trampolineBytes, defaultTrampoline.IsValid());
+
 		defaultTrampoline.write_branch(updateQuestsHook);
+		diagnostics::RecordHookGroupInstalled(diagnostics::HookGroup::kUpdateQuests);
+
 		defaultTrampoline.write_call(allowedToShowMapMarkerHook[0]);
 		defaultTrampoline.write_call(allowedToShowMapMarkerHook[1]);
+		// Recorded only once BOTH sites are written. A half-written pair is the failure that
+		// actually happened here, so a flag set after the first write would have hidden exactly
+		// the case worth catching.
+		diagnostics::RecordHookGroupInstalled(diagnostics::HookGroup::kAllowedToShowMapMarker);
+
 		defaultTrampoline.write_call(updateLocationsHook);
+		diagnostics::RecordHookGroupInstalled(diagnostics::HookGroup::kUpdateLocations);
+
 		defaultTrampoline.write_call(updateEnemiesHook);
+		diagnostics::RecordHookGroupInstalled(diagnostics::HookGroup::kUpdateEnemies);
+
 		defaultTrampoline.write_call(updatePlayerSetMarkerHook);
+		diagnostics::RecordHookGroupInstalled(diagnostics::HookGroup::kUpdatePlayerSetMarker);
 
 		Compass::vTable.write_vfunc(1, UpdateCompass);
+		diagnostics::RecordHookGroupInstalled(diagnostics::HookGroup::kCompassUpdateVFunc);
+
+		diagnostics::RecordHookInstallCompleted();
 	}
 
 	namespace compat
@@ -215,6 +242,10 @@ namespace hooks
 					logger::error("CoMAP compatibility: could not find the expected byte pattern in "
 								 "MapMarkerFramework.dll; skipping the compatibility patch for this version");
 
+					diagnostics::RecordComapPatchSkipped("the expected ImportManager::SetupHUDMenu byte pattern "
+																"was not found in MapMarkerFramework.dll (a CoMAP build this "
+																"patch was never verified against)");
+
 					return false;
 				}
 
@@ -233,6 +264,10 @@ namespace hooks
 				{
 					logger::error("CoMAP compatibility: could not reserve trampoline space near "
 								 "MapMarkerFramework.dll; skipping the compatibility patch");
+
+					diagnostics::RecordComapPatchSkipped("no free memory block large enough was found within "
+																"branch-displacement range of MapMarkerFramework.dll, so the "
+																"trampoline would have been unusable");
 
 					return false;
 				}
