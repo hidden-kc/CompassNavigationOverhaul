@@ -1,3 +1,7 @@
+#include <cctype>
+#include <fstream>
+#include <map>
+
 #include "Settings.h"
 
 #include "utils/INISettingCollection.h"
@@ -332,6 +336,145 @@ namespace settings
 			return WriteRaw(a_section, a_key, a_value ? "1" : "0");
 		}
 
+		// ------------------------------------------------------------------------------------
+		// THE SAVE/RELOAD ASYMMETRY, fixed 2026-08-27.
+		//
+		// Save() writes the INI with plain file I/O (see FlushPendingWrites and the note there
+		// about usvfs quietly swallowing WritePrivateProfileString). The read side did not
+		// match: it went through INISettingCollection::ReadFromFile, which is the game's
+		// collection and uses the Win32 profile APIs. PrivateProfileRedirector hooks those and
+		// serves them from its own cache, so a reload handed back the values the file held when
+		// the game started rather than the ones just written.
+		//
+		// Same bug, same cause and same fix as Dragon's Eye Minimap 1.5.7. Read the file
+		// ourselves and prefer what it actually says.
+		// ------------------------------------------------------------------------------------
+		std::map<std::string, std::string> fileValues;
+
+		// Parses the INI into the same "name:Section" keys the collection uses, so every
+		// existing Read<> call site keeps working unchanged.
+		void LoadFileValues(const std::string& a_path)
+		{
+			fileValues.clear();
+
+			std::ifstream in(a_path, std::ios::binary);
+
+			if (!in)
+			{
+				logger::warn("Could not open {} for a direct read; falling back to the settings collection", a_path);
+
+				return;
+			}
+
+			std::string line;
+			std::string section;
+
+			while (std::getline(in, line))
+			{
+				if (!line.empty() && line.back() == '\r')
+				{
+					line.pop_back();
+				}
+
+				const std::string_view trimmed = Trim(line);
+
+				if (trimmed.empty() || trimmed.front() == ';' || trimmed.front() == '#')
+				{
+					continue;
+				}
+
+				if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']')
+				{
+					section = std::string{ Trim(trimmed.substr(1, trimmed.size() - 2)) };
+
+					continue;
+				}
+
+				const std::size_t separator = trimmed.find('=');
+
+				if (separator == std::string_view::npos)
+				{
+					continue;
+				}
+
+				const std::string key{ Trim(trimmed.substr(0, separator)) };
+				const std::string value{ Trim(trimmed.substr(separator + 1)) };
+
+				if (!key.empty())
+				{
+					fileValues[key + ":" + section] = value;
+				}
+			}
+
+			logger::debug("Read {} value(s) directly from {}", fileValues.size(), a_path);
+		}
+
+		// Converts a raw INI string to T. Returns false when the text is not valid for the
+		// type, so the caller keeps the value it already had rather than silently substituting
+		// a zero for a typo.
+		template <typename T>
+		bool ParseValue(const std::string& a_text, T& a_out)
+		{
+			if (a_text.empty())
+			{
+				return false;
+			}
+
+			try
+			{
+				if constexpr (std::is_same_v<T, bool>)
+				{
+					std::string lowered;
+					lowered.reserve(a_text.size());
+
+					for (unsigned char c : a_text)
+					{
+						lowered.push_back(static_cast<char>(std::tolower(c)));
+					}
+
+					if (lowered == "1" || lowered == "true" || lowered == "yes")
+					{
+						a_out = true;
+
+						return true;
+					}
+
+					if (lowered == "0" || lowered == "false" || lowered == "no")
+					{
+						a_out = false;
+
+						return true;
+					}
+
+					return false;
+				}
+				else if constexpr (std::is_floating_point_v<T>)
+				{
+					a_out = static_cast<T>(std::stod(a_text));
+
+					return true;
+				}
+				else if constexpr (std::is_signed_v<T>)
+				{
+					a_out = static_cast<T>(std::stoll(a_text));
+
+					return true;
+				}
+				else
+				{
+					a_out = static_cast<T>(std::stoull(a_text));
+
+					return true;
+				}
+			}
+			catch (const std::exception&)
+			{
+				logger::warn("Value \"{}\" in the INI is not valid for its type; keeping the current value", a_text);
+
+				return false;
+			}
+		}
+
 		// RE::INISettingCollection::GetSetting returns null for a name that is not in the
 		// collection, and the templated GetSetting<T> helpers dereference that without
 		// checking. AddChecked below deliberately skips a malformed setting, so a skipped one
@@ -341,6 +484,17 @@ namespace settings
 		template <typename T>
 		T Read(INISettingCollection* a_collection, const char* a_name, T a_fallback)
 		{
+			// The file on disk is the truth. The collection may be serving a redirector's cache.
+			if (const auto it = fileValues.find(a_name); it != fileValues.end())
+			{
+				T parsed{};
+
+				if (ParseValue<T>(it->second, parsed))
+				{
+					return parsed;
+				}
+			}
+
 			if (!a_collection->GetSetting(a_name))
 			{
 				logger::error("Setting \"{}\" is missing from the collection; keeping the current value", a_name);
@@ -466,11 +620,24 @@ namespace settings
 			add("bHideInCombat:QuestList", hideInCombat);
 		}
 
-		if (!iniSettingCollection->ReadFromFile(a_iniFileName))
-		{
-			logger::warn("Could not read {}, falling back to default options", a_iniFileName);
-		}
+		// DELIBERATELY NOT calling iniSettingCollection->ReadFromFile here.
+		//
+		// That call goes through GetPrivateProfileString, which PrivateProfileRedirector hooks -
+		// and the moment it is asked about our INI, the Redirector pulls the whole file into its
+		// own cache and from then on behaves as though it owns it. With the settings this
+		// modlist ships (NativeWrite=0, SaveOnWrite=1, SaveOnGameSave=1, SaveOnProcessDetach=1)
+		// it will later flush that cached copy back to disk, overwriting the values we wrote
+		// ourselves with plain file I/O and losing settings between sessions.
+		//
+		// So the INI is never introduced to the profile API at all. LoadFileValues reads it
+		// directly, and the collection is left holding only the compiled-in defaults registered
+		// through AddChecked above - exactly the fallback we want for a key the file omits.
+		//
+		// This also makes the plugin behave identically with or without the Redirector
+		// installed, because we no longer touch the API it hooks in either direction.
+		logger::debug("Settings are read directly from {}; the INI collection holds defaults only", a_iniFileName);
 
+		LoadFileValues(iniPath);
 		ReadFromCollection();
 	}
 
@@ -483,13 +650,10 @@ namespace settings
 			return false;
 		}
 
-		if (!INISettingCollection::GetSingleton()->ReadFromFile(iniFileName))
-		{
-			logger::error("Could not re-read {}; keeping the settings already loaded", iniPath);
-
-			return false;
-		}
-
+		// Same reasoning as Init: re-reading through the collection would hand our INI to
+		// PrivateProfileRedirector's cache, and a reload is precisely the moment we most need
+		// the file on disk rather than a cache of it. LoadFileValues reads it directly.
+		LoadFileValues(iniPath);
 		ReadFromCollection();
 
 		logger::info("Reloaded settings from {}", iniPath);

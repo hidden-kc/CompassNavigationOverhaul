@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
 	CompassNavigationOverhaul
-	VERSION 1.1.0
+	VERSION 1.1.1
 	LANGUAGES CXX
 )
 
@@ -42,6 +42,50 @@ find_package(directxtk CONFIG REQUIRED)
 
 add_commonlibsse_plugin(${PROJECT_NAME} SOURCES ${headers} ${sources})
 add_library("${PROJECT_NAME}::${PROJECT_NAME}" ALIAS "${PROJECT_NAME}")
+
+########################################################################################################################
+## Debug symbols (CLAUDE.md rule 43) - stated on the target, never left to a default
+########################################################################################################################
+#
+# The preset chain leaves CMAKE_CXX_FLAGS_RELWITHDEBINFO EMPTY and the link flags as
+# "/INCREMENTAL:NO /LTCG" - no /Zi, no /DEBUG. RelWithDebInfo therefore produces a DLL with NO
+# CodeView (RSDS) record at all, and the PDB beside it is whatever the previous build left there.
+# Caught 2026-08-26 on IshSoulsToPerks, only because the packaging script refuses a DLL it cannot
+# prove a PDB belongs to.
+#
+# cmake_minimum_required here is 3.21, where CMP0141 is OLD and
+# CMAKE_MSVC_DEBUG_INFORMATION_FORMAT is not consulted - so unlike SureOfStealing (3.29), nothing
+# rescues this implicitly.
+#
+# /DEBUG implies /OPT:NOREF, so /OPT:REF and /OPT:ICF are restated to keep Release-grade linking.
+# Do not remove these on the assumption that RelWithDebInfo "obviously" has debug info.
+if (MSVC)
+	target_compile_options(${PROJECT_NAME} PRIVATE /Zi)
+	target_link_options(${PROJECT_NAME} PRIVATE /DEBUG:FULL /OPT:REF /OPT:ICF)
+
+	########################################################################################
+	## Do not ship the build machine's absolute paths inside the DLL
+	########################################################################################
+	#
+	# Before this, released DLLs contained ~30 copies of "D:\Claude output\..." - the PDB path
+	# the linker records, plus one absolute source path per logging call site, because SKSE::log
+	# captures std::source_location and __FILE__ is whatever the compiler was handed. That leaks
+	# the build tree's layout to every downloader for no benefit, and long absolute developer
+	# paths in an unsigned DLL are a plausible contributor to antivirus heuristic scoring (see the
+	# Wacatac!ml false-positive report, 2026-08-27).
+	#
+	# /PDBALTPATH:%_PDB% records only the PDB's FILENAME in the debug directory instead of its full
+	# path. Safe for us specifically: Crash Logger resolves symbols from the PDB sitting beside the
+	# DLL, which is exactly how rule 43 ships them - verified still pairing after the change.
+	#
+	# /d1trimfile: strips a prefix from __FILE__ at compile time. The prefix must be in native
+	# (backslash) form to match what the compiler actually received, and deliberately has NO
+	# trailing separator - a trailing backslash immediately before the closing quote would escape
+	# that quote and mangle the argument.
+	file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" PROJECT_NATIVE_DIR)
+	target_compile_options(${PROJECT_NAME} PRIVATE "/d1trimfile:${PROJECT_NATIVE_DIR}")
+	target_link_options(${PROJECT_NAME} PRIVATE /PDBALTPATH:%_PDB%)
+endif()
 
 target_include_directories(
 	${PROJECT_NAME}
