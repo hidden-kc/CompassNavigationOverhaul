@@ -91,6 +91,27 @@ void SKSEMessageListener(SKSE::MessagingInterface::Message* a_msg)
 
 			diagnostics::RecordComapPatchNotAttempted("MapMarkerFramework (CoMAP) is not installed");
 		}
+
+		// Detection only - the deferred quest-marker path in CNO::HUDMarkerManager is passive and
+		// needs no coordination with the other plugin. This exists so the log and the DevBench
+		// status tool can tell the known Quest Marker Limit Fix interplay (its replayed markers
+		// needing end-of-frame reconciliation) apart from some other cause when quest markers show
+		// but carry no details.
+		const SKSE::PluginInfo* questMarkerLimitFixPluginInfo = skse->GetPluginInfo("Quest Marker Limit Fix");
+
+		diagnostics::RecordQmlfDetection(questMarkerLimitFixPluginInfo != nullptr,
+			questMarkerLimitFixPluginInfo ? questMarkerLimitFixPluginInfo->version : 0);
+
+		if (questMarkerLimitFixPluginInfo)
+		{
+			logger::info("Quest Marker Limit Fix detected; quest markers it replays itself will be "
+						 "reconciled against the marker array at the end of each frame");
+		}
+		else
+		{
+			logger::debug("Quest Marker Limit Fix is not installed; quest markers are processed at "
+						  "their AddMarker calls as usual");
+		}
 	}
 	else if (a_msg->type == SKSE::MessagingInterface::kPostPostLoad)
 	{

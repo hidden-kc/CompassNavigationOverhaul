@@ -9,6 +9,29 @@
 
 namespace CNO
 {
+	// The marker array holds 48 position slots (RE::HUDMarkerManager::position). The game's own
+	// quest limit is 16 and Quest Marker Limit Fix raises it to exactly 48, so nothing ever
+	// commits past this.
+	inline constexpr std::uint32_t kMarkerSlotCount = 48;
+
+	// A quest target whose AddMarker call was declined (returned false) at the UpdateQuests call
+	// site. Quest Marker Limit Fix makes exactly that happen for every quest target: it swallows
+	// the calls, picks the closest markers itself, then replays the winners straight into the
+	// original AddMarker - calls this mod's call-site hook never sees. The target is stashed here
+	// with the position the game handed us; SetMarkersExtraInfo() then looks for that position in
+	// the marker array and, if someone else committed it, runs the ordinary quest bookkeeping
+	// against the slot it actually landed in. Without such a mod a declined marker was genuinely
+	// not added, matches nothing, and is dropped.
+	struct PendingQuestMarker
+	{
+		RE::TESObjectREFR* marker;
+		RE::NiPoint3 position;
+		RE::TESQuest* quest;
+		RE::BGSInstancedQuestObjective* questObjective;
+		int questAgeIndex;
+		std::uint32_t markerIcon;
+	};
+
 	class HUDMarkerManager
 	{
 	public:
@@ -20,7 +43,12 @@ namespace CNO
 		}
 
 		void ProcessQuestMarker(RE::TESQuest* a_quest, RE::BGSInstancedQuestObjective* a_questObjective,
-								int a_questAgeIndex, RE::TESObjectREFR* a_marker, std::uint32_t a_markerIcon);
+								int a_questAgeIndex, RE::TESObjectREFR* a_marker, std::uint32_t a_markerIcon,
+								std::uint32_t a_slotIndex);
+
+		void DeferQuestMarker(RE::TESObjectREFR* a_marker, const RE::NiPoint3& a_position,
+							  RE::TESQuest* a_quest, RE::BGSInstancedQuestObjective* a_questObjective,
+							  int a_questAgeIndex, std::uint32_t a_markerIcon);
 
 		void ProcessLocationMarker(RE::ExtraMapMarker* a_mapMarker, RE::TESObjectREFR* a_marker,
 								   std::uint32_t a_markerIcon);
@@ -32,6 +60,16 @@ namespace CNO
 		void SetMarkersExtraInfo();
 
 	private:
+
+		void ReconcilePendingQuestMarkers();
+
+		void ClaimSlot(std::uint32_t a_slot)
+		{
+			if (a_slot < kMarkerSlotCount)
+			{
+				claimedSlots[a_slot] = true;
+			}
+		}
 
 		bool IsTheFocusedMarker(const RE::TESObjectREFR* a_marker) const
 		{
@@ -95,6 +133,13 @@ namespace CNO
 
 		std::unordered_map<RE::TESObjectREFR*, std::unordered_map<RE::TESQuest*, QuestItem>> questItems;
 		std::unordered_map<RE::TESObjectREFR*, QuestItem> miscQuestItem;
+
+		// Per-frame state for the deferred quest-marker path (see PendingQuestMarker). The claim
+		// marks are written by the immediate Process*Marker paths, so reconciliation only ever
+		// matches slots some other mod committed; both are consumed and reset together at the top
+		// of the next SetMarkersExtraInfo().
+		std::vector<PendingQuestMarker> pendingQuestMarkers;
+		bool claimedSlots[kMarkerSlotCount]{};
 
 		RE::HUDMarkerManager* const hudMarkerManager = RE::HUDMarkerManager::GetSingleton();
 		RE::PlayerCharacter* player = RE::PlayerCharacter::GetSingleton();

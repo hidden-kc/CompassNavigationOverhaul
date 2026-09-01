@@ -48,13 +48,23 @@ namespace diagnostics
 			std::array<bool, hookGroupCount> hookGroupInstalled{};
 			std::optional<clock::time_point> lastHookInstall;
 
-			// CoMAP compatibility patch
-			ComapState comapState = ComapState::kNotAttempted;
-			std::string comapReason = "the patch decision has not been made yet (kPostLoad not reached)";
-			bool comapDetected = false;
-			bool comapDetectionRun = false;
-			std::uint32_t comapVersion = 0;
-			std::optional<clock::time_point> lastComapDecision;
+		// CoMAP compatibility patch
+		ComapState comapState = ComapState::kNotAttempted;
+		std::string comapReason = "the patch decision has not been made yet (kPostLoad not reached)";
+		bool comapDetected = false;
+		bool comapDetectionRun = false;
+		std::uint32_t comapVersion = 0;
+		std::optional<clock::time_point> lastComapDecision;
+
+		// Quest Marker Limit Fix compatibility
+		bool qmlfDetected = false;
+		bool qmlfDetectionRun = false;
+		std::uint32_t qmlfVersion = 0;
+		std::uint64_t questMarkersReconciled = 0;
+		std::uint64_t questMarkersUnmatched = 0;
+		std::size_t lastReconcileMatched = 0;
+		std::size_t lastReconcileUnmatched = 0;
+		std::optional<clock::time_point> lastQuestMarkerReconcile;
 
 			// Infinity UI / HUD patch lifecycle
 			bool infinityUiListenerAttempted = false;
@@ -286,6 +296,34 @@ namespace diagnostics
 		}
 
 		// Caller holds mtx.
+		std::string BuildQmlfJson()
+		{
+			return std::format(
+				"\"questMarkerLimitFix\":{{"
+				"\"detectionRun\":{},"
+				"\"detected\":{},"
+				"\"detectedVersion\":\"{}\","
+				"\"detectedVersionRaw\":{},"
+				"\"reconciliation\":{{"
+				"\"matchedTotal\":{},"
+				"\"unmatchedTotal\":{},"
+				"\"lastMatched\":{},"
+				"\"lastUnmatched\":{},"
+				"{}"
+				"}}"
+				"}}",
+				Bool(state.qmlfDetectionRun),
+				Bool(state.qmlfDetected),
+				DecodeVersion(state.qmlfVersion),
+				state.qmlfVersion,
+				state.questMarkersReconciled,
+				state.questMarkersUnmatched,
+				state.lastReconcileMatched,
+				state.lastReconcileUnmatched,
+				SecondsAgoField("last", state.lastQuestMarkerReconcile));
+		}
+
+		// Caller holds mtx.
 		std::string BuildInfinityUiJson()
 		{
 			return std::format(
@@ -371,8 +409,10 @@ namespace diagnostics
 				json += ',';
 				json += BuildHooksJson();
 				json += ',';
-				json += BuildComapJson();
-				json += ',';
+			json += BuildComapJson();
+			json += ',';
+			json += BuildQmlfJson();
+			json += ',';
 				json += BuildInfinityUiJson();
 				json += ',';
 				json += BuildMarkersJson();
@@ -420,7 +460,8 @@ namespace diagnostics
 			"{"
 			"\"description\":\"Live Compass Navigation Overhaul state: current settings, which "
 			"hook groups installed, whether the CoMAP compatibility patch applied or was skipped "
-			"and why, the Infinity UI HUD patch lifecycle, and per-frame marker/compass-update "
+			"and why, Quest Marker Limit Fix detection and deferred quest-marker reconciliation "
+			"counts, the Infinity UI HUD patch lifecycle, and per-frame marker/compass-update "
 			"counters.\","
 			"\"inputSchema\":{\"type\":\"object\",\"properties\":{}},"
 			"\"readOnly\":true"
@@ -515,6 +556,26 @@ namespace diagnostics
 		state.comapState = ComapState::kSkipped;
 		state.comapReason = a_reason;
 		state.lastComapDecision = clock::now();
+	}
+
+	void RecordQmlfDetection(bool a_present, std::uint32_t a_version)
+	{
+		std::scoped_lock lock(mtx);
+
+		state.qmlfDetectionRun = true;
+		state.qmlfDetected = a_present;
+		state.qmlfVersion = a_version;
+	}
+
+	void RecordQuestMarkersReconciled(std::size_t a_matched, std::size_t a_unmatched)
+	{
+		std::scoped_lock lock(mtx);
+
+		state.questMarkersReconciled += a_matched;
+		state.questMarkersUnmatched += a_unmatched;
+		state.lastReconcileMatched = a_matched;
+		state.lastReconcileUnmatched = a_unmatched;
+		state.lastQuestMarkerReconcile = clock::now();
 	}
 
 	void RecordInfinityUiListener(bool a_registered)

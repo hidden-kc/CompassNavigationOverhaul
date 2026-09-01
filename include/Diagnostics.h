@@ -82,6 +82,22 @@ namespace diagnostics
 	void RecordComapPatchSkipped(std::string_view a_reason);
 
 	// ---------------------------------------------------------------------------------------
+	// Quest Marker Limit Fix compatibility (deferred quest-marker reconciliation)
+	// ---------------------------------------------------------------------------------------
+
+	// Quest Marker Limit Fix was looked for at kPostLoad. a_present/a_version come straight from
+	// SKSE::LoadInterface::GetPluginInfo. Detection is for reporting only - the deferred
+	// quest-marker path below is passive and behaves identically whether or not the plugin is
+	// installed.
+	void RecordQmlfDetection(bool a_present, std::uint32_t a_version);
+
+	// One ReconcilePendingQuestMarkers() pass finished inside SetMarkersExtraInfo(). Counters
+	// are cumulative; the last pair is what the most recent pass matched and dropped. All zeroes
+	// with a null timestamp mean the deferred path has never had anything to reconcile - the
+	// expected steady state without Quest Marker Limit Fix.
+	void RecordQuestMarkersReconciled(std::size_t a_matched, std::size_t a_unmatched);
+
+	// ---------------------------------------------------------------------------------------
 	// Infinity UI / HUD patch lifecycle
 	// ---------------------------------------------------------------------------------------
 

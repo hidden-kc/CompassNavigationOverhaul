@@ -119,6 +119,57 @@ Net effect: on a system where this compatibility patch can't be safely installed
 now runs completely normally without it - the patch was only ever for CoMAP versions
 predating CoMAP's own 2.2.0 anyway, so skipping it doesn't lose current-CoMAP functionality.
 
+## 1.1.2: Quest Marker Limit Fix compatibility - deferred quest-marker reconciliation
+
+Symptom: with [Quest Marker Limit Fix](https://www.nexusmods.com/skyrimspecialedition/mods/189762)
+(Nexus 189762) installed, quest markers appeared on the compass but the hover feature showed no
+objective/distance and the quest list never appeared.
+
+Cause, from that mod's shared source: it entry-hooks `HUDMarkerManager::UpdateQuests`,
+`AddMarker` and `UpdateLocations`, and per frame it (a) runs `UpdateLocations` itself as a
+prepass (so location markers claim their slots first), (b) runs the original `UpdateQuests`
+with collection armed - its `AddMarker` entry hook records every quest call as a candidate and
+returns false **without calling the original**, and (c) replays its selected candidates
+directly into the original `AddMarker`, bypassing the game's `UpdateQuests` code entirely.
+This mod's quest bookkeeping lives in the `AddMarker == true` branch of its call-site hook
+*inside* the game's `UpdateQuests` - so step (b) made it see false for every target and skip
+everything, and step (c) never went past its hook at all. The two mods' hooks never overlap
+mechanically (call sites inside function bodies vs function entries), which is why nothing
+crashed: the breakage was purely data-flow. Note that mod installs only on SE 1.6.1170
+(hardcoded RVAs + prologue byte checks; on other runtimes it fails its checks and this mod is
+unaffected).
+
+The fix is deliberately passive - no hooks on, scans of, or coordination with the other
+plugin:
+
+- The quest call-site hook (`hooks::UpdateQuests`) now also records a *pending* candidate
+  (marker ref, a copy of the position the game passed, quest, objective, age index, icon)
+  whenever `AddMarker` returns false, instead of dropping the target. Quest resolution has to
+  happen there anyway - `TESQuestTarget` is only valid for the duration of the call.
+- `SetMarkersExtraInfo()` - which runs from the `Compass::Update` vfunc hook after *every*
+  AddMarker this frame, including the other mod's replays and any eviction slot-shuffling it
+  did - reconciles the pending candidates against the committed marker array. The array
+  carries no handles, so a candidate is matched by exact `NiPoint3` equality against
+  `position[slot]`: whatever committed it copied the very same position value into that slot,
+  and eviction moves entries without changing their values, so matching the final array state
+  is the more correct view even in eviction frames. Slots this mod committed itself
+  (locations, enemies, player-set) are claimed per frame and never matched; several objectives
+  routed through one door share a position and therefore one slot, which reproduces this
+  mod's existing same-marker grouping.
+- On a match, the ordinary `ProcessQuestMarker` bookkeeping runs with the matched slot, so
+  focus/hover details and the quest list behave as before.
+- Without a limit mod, a false return meant the marker was genuinely not added: the pending
+  candidate matches nothing and is dropped. Vanilla behavior is unchanged - the deferred path
+  simply no-ops.
+
+Residual, accepted limitations: in eviction frames (48+ HUD markers) already-committed slot
+indices can be one frame stale (cosmetic, self-corrects next frame), and two distinct targets
+at byte-identical positions could in principle cross-match (astronomically unlikely, and the
+failure is one marker's hover text for a frame). Detection of the plugin at `kPostLoad` and
+per-frame matched/unmatched counters are exposed through the DevBench
+`compassnavigationoverhaul.status` tool so the position-match assumption can be verified live
+in game.
+
 ## Building
 
 Same as Dragon's Eye Minimap and Local Map Upgrade - Visual Studio (Desktop development with

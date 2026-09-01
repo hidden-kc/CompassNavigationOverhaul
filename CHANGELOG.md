@@ -23,6 +23,14 @@ reclaimed), **scratch** (a hypothesis-test build that never held a real number).
 >   `rules-version.ps1 -Action bump`. If a number was typed by hand, it is wrong until the tool
 >   agrees.
 
+## 1.1.2 - 2026-09-02 - working
+
+### Added
+- Compatibility with Quest Marker Limit Fix (Nexus 189762): quest markers showed on the compass but carried no hover details and never fed the quest list, because that mod swallows every quest AddMarker call (returning false) and replays its selected markers straight into the original AddMarker - calls this mod's UpdateQuests call-site hook never sees, so ProcessQuestMarker never ran for any quest marker. The quest call-site hook now also records a pending candidate (marker, position, quest, objective, icon) whenever AddMarker declines, and SetMarkersExtraInfo() reconciles those candidates against the marker array at the end of the frame, matching by the exact position the game handed the declined call and committing the ordinary quest bookkeeping against the slot it landed in. Passive by design: without a limit mod installed, a declined marker was genuinely not added, matches nothing in the array, and is dropped - behavior is unchanged. Slots this mod committed itself (locations, enemies, player-set markers) are claimed per frame and never matched. Detection of the plugin at kPostLoad and per-frame matched/unmatched counters are exposed via the DevBench status tool for in-game verification. Known accepted limitation: in frames where the limit mod evicts a marker to make room (only at 48+ HUD markers), already-committed slot indices can be one frame stale - cosmetic, self-correcting.
+
+### Verified
+- In-game test 2026-09-02 (SE 1.6.1170, both mods installed): the hover feature displays quest marker objectives and details again with Quest Marker Limit Fix active - the reported symptom is gone.
+
 ## 1.1.1 - 2026-08-27 - untested
 
 ### Fixed
